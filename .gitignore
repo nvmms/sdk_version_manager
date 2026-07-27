@@ -13,6 +13,9 @@
 
 # Qt Creator build directories
 build/
+build-release/
+release/
+dist/
 cmake-build-*/
 out/
 

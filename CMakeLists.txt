@@ -2,6 +2,9 @@ cmake_minimum_required(VERSION 3.16)
 
 project(sdk_version_manager VERSION 0.1 LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(Qt6 REQUIRED COMPONENTS Quick Network Concurrent)
@@ -60,3 +63,10 @@ install(TARGETS appsdk_version_manager svm
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
 )
+
+qt_generate_deploy_qml_app_script(
+    TARGET appsdk_version_manager
+    OUTPUT_SCRIPT deploy_script
+    NO_UNSUPPORTED_PLATFORM_ERROR
+)
+install(SCRIPT ${deploy_script})

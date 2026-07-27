@@ -1,0 +1,139 @@
+name: Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  QT_VERSION: "6.10.0"
+
+jobs:
+  package:
+    name: Windows ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2022
+            qt_arch: win64_msvc2022_64
+            cmake_arch: x64
+          - arch: arm64
+            runner: windows-11-arm
+            qt_arch: win64_msvc2022_arm64
+            cmake_arch: ARM64
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          arch: ${{ matrix.qt_arch }}
+          cache: true
+
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --yes --no-progress
+
+      - name: Resolve package version
+        id: version
+        shell: pwsh
+        run: |
+          $version = if ("${{ github.ref_type }}" -eq "tag") {
+            "${{ github.ref_name }}".TrimStart("v")
+          } else {
+            "0.1.${{ github.run_number }}"
+          }
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+            throw "The package version must contain exactly three numeric parts: $version"
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build-release
+          -G "Visual Studio 17 2022"
+          -A "${{ matrix.cmake_arch }}"
+          -DCMAKE_INSTALL_PREFIX="${{ github.workspace }}/release"
+
+      - name: Build
+        shell: pwsh
+        run: cmake --build build-release --config Release --parallel
+
+      - name: Create self-contained release directory
+        shell: pwsh
+        run: cmake --install build-release --config Release
+
+      - name: Verify release directory
+        shell: pwsh
+        run: |
+          $required = @(
+            "release/bin/appsdk_version_manager.exe",
+            "release/bin/svm.exe",
+            "release/bin/Qt6Core.dll",
+            "release/bin/platforms/qwindows.dll"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Missing required release file: $path"
+            }
+          }
+
+      - name: Create portable archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive `
+            -Path "release/*" `
+            -DestinationPath "dist/SVM-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}-portable.zip"
+
+      - name: Create NSIS installer from release directory
+        shell: pwsh
+        run: |
+          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) {
+            $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          }
+          if (-not (Test-Path -LiteralPath $makensis)) {
+            throw "makensis.exe was not found"
+          }
+
+          $releaseDir = (Resolve-Path "release").Path
+          $outputFile = (Join-Path (Resolve-Path "dist").Path `
+            "SVM-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}-setup.exe")
+
+          & $makensis `
+            "/DAPP_VERSION=${{ steps.version.outputs.version }}" `
+            "/DAPP_ARCH=${{ matrix.arch }}" `
+            "/DRELEASE_DIR=$releaseDir" `
+            "/DOUTPUT_FILE=$outputFile" `
+            "installer/windows/installer.nsi"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "NSIS failed with exit code $LASTEXITCODE"
+          }
+
+      - name: Upload release directory
+        uses: actions/upload-artifact@v4
+        with:
+          name: SVM-windows-${{ matrix.arch }}-release
+          path: release/
+          if-no-files-found: error
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: SVM-windows-${{ matrix.arch }}-packages
+          path: dist/
+          if-no-files-found: error
