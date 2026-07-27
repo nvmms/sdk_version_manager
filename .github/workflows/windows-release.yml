@@ -101,17 +101,10 @@ jobs:
           }
           Write-Host "Qt platform plugin: $($platformPlugin.FullName)"
 
-      - name: Create portable archive
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive `
-            -Path "release/*" `
-            -DestinationPath "dist/SVM-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}-portable.zip"
-
       - name: Create NSIS installer from release directory
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
           $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
           if (-not $makensis) {
             $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -162,9 +155,7 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
           $expected = @(
-            "SVM-$version-windows-x64-portable.zip",
             "SVM-$version-windows-x64-setup.exe",
-            "SVM-$version-windows-arm64-portable.zip",
             "SVM-$version-windows-arm64-setup.exe"
           )
 
