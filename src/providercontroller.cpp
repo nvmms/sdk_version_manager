@@ -12,6 +12,8 @@
 #include <QStandardPaths>
 #include <QUrl>
 
+#include <utility>
+
 #ifdef Q_OS_WIN
 #include <windows.h>
 #endif
@@ -19,6 +21,8 @@
 namespace {
 constexpr auto nodeIndexUrl = "https://nodejs.org/dist/index.json";
 constexpr auto nodeDistBase = "https://nodejs.org/dist/";
+constexpr auto flutterIndexUrl =
+    "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json";
 }
 
 ProviderController::ProviderController(QObject *parent)
@@ -38,7 +42,7 @@ QVariantMap ProviderController::defaultVersions() const { return m_defaultVersio
 
 void ProviderController::loadVersions(const QString &providerId, bool forceRefresh)
 {
-    if (providerId != QStringLiteral("node")) {
+    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -48,6 +52,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
     if (m_providerId != providerId) {
         m_providerId = providerId;
         emit activeProviderChanged();
+        m_versions.clear();
+        emit versionsChanged();
     }
     if (!m_version.isEmpty()) {
         m_version.clear();
@@ -58,32 +64,48 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
     }
     if (!forceRefresh) {
         QFile cache(cachePath(providerId));
-        if (cache.open(QIODevice::ReadOnly) && applyNodeIndex(cache.readAll())) {
-            setStatus(tr("已读取本地 Node.js 版本缓存"));
-            return;
+        if (cache.open(QIODevice::ReadOnly)) {
+            const QByteArray data = cache.readAll();
+            const bool applied = providerId == QStringLiteral("node")
+                ? applyNodeIndex(data)
+                : applyFlutterIndex(data);
+            if (applied) {
+                setStatus(tr("已读取本地 %1 版本缓存").arg(
+                    providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
+                                                         : QStringLiteral("Flutter")));
+                return;
+            }
         }
     }
 
     setError({});
-    setStatus(tr("正在从 Node.js 官方源获取版本…"));
+    const QString displayName = providerId == QStringLiteral("node")
+        ? QStringLiteral("Node.js") : QStringLiteral("Flutter");
+    setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
 
-    m_reply = m_network.get(QNetworkRequest(QUrl(QString::fromLatin1(nodeIndexUrl))));
-    connect(m_reply, &QNetworkReply::finished, this, [this, providerId] {
+    const QUrl indexUrl(providerId == QStringLiteral("node")
+                            ? QString::fromLatin1(nodeIndexUrl)
+                            : QString::fromLatin1(flutterIndexUrl));
+    m_reply = m_network.get(QNetworkRequest(indexUrl));
+    connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
         QNetworkReply *reply = m_reply;
         m_reply = nullptr;
         if (reply->error() != QNetworkReply::NoError) {
             const QString message = reply->errorString();
             reply->deleteLater();
-            fail(tr("获取 Node.js 版本失败：%1").arg(message));
+            fail(tr("获取 %1 版本失败：%2").arg(displayName, message));
             return;
         }
 
         const QByteArray data = reply->readAll();
         reply->deleteLater();
-        if (!applyNodeIndex(data)) {
-            fail(tr("Node.js 版本索引格式无效"));
+        const bool applied = providerId == QStringLiteral("node")
+            ? applyNodeIndex(data)
+            : applyFlutterIndex(data);
+        if (!applied) {
+            fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
         }
 
@@ -95,7 +117,7 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             cache.commit();
         }
 
-        setStatus(tr("已从 Node.js 官方源获取 %1 个版本").arg(m_versions.size()));
+        setStatus(tr("已从 %1 官方源获取 %2 个版本").arg(displayName).arg(m_versions.size()));
         setBusy(false);
     });
 }
@@ -148,6 +170,50 @@ bool ProviderController::applyNodeIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyFlutterIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        return false;
+    }
+
+    const QJsonObject root = document.object();
+    const QString baseUrl = root.value(QStringLiteral("base_url")).toString();
+    const QJsonObject current = root.value(QStringLiteral("current_release")).toObject();
+    QVariantList versions;
+    for (const QJsonValue &value : root.value(QStringLiteral("releases")).toArray()) {
+        const QJsonObject release = value.toObject();
+        const QString arch = release.value(QStringLiteral("dart_sdk_arch")).toString();
+        const QString archive = release.value(QStringLiteral("archive")).toString();
+        const QString sha256 = release.value(QStringLiteral("sha256")).toString();
+        const QString channel = release.value(QStringLiteral("channel")).toString();
+        if ((!arch.isEmpty() && arch != QStringLiteral("x64"))
+            || archive.isEmpty() || sha256.size() != 64) {
+            continue;
+        }
+
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), release.value(QStringLiteral("version")).toString());
+        item.insert(QStringLiteral("channel"), channel);
+        item.insert(QStringLiteral("released"),
+                    release.value(QStringLiteral("release_date")).toString().left(10));
+        item.insert(QStringLiteral("size"), QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"),
+                    current.value(channel).toString()
+                        == release.value(QStringLiteral("hash")).toString());
+        item.insert(QStringLiteral("downloadUrl"), baseUrl + u'/' + archive);
+        item.insert(QStringLiteral("sha256"), sha256.toLower());
+        versions.append(item);
+    }
+    if (versions.isEmpty()) {
+        return false;
+    }
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -167,13 +233,13 @@ QString ProviderController::downloadManifestPath(const QString &providerId, cons
 
 void ProviderController::download(const QString &providerId, const QString &version)
 {
-    if (providerId != QStringLiteral("node")) {
+    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
     static const QRegularExpression safeVersion(QStringLiteral(R"(^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$)"));
     if (!safeVersion.match(version).hasMatch()) {
-        setError(tr("Node.js 版本号无效"));
+        setError(tr("%1 版本号无效").arg(providerId));
         return;
     }
     if (m_busy) {
@@ -195,7 +261,29 @@ void ProviderController::download(const QString &providerId, const QString &vers
         m_version = version;
         emit activeVersionChanged();
     }
-    m_downloadPath = directory + u'/' + nodeFileName(version);
+    QUrl url;
+    QString fileName;
+    m_expectedHash.clear();
+    if (providerId == QStringLiteral("node")) {
+        fileName = nodeFileName(version);
+        url = QUrl(QString::fromLatin1(nodeDistBase) + u'v' + version + u'/' + fileName);
+    } else {
+        for (const QVariant &entry : std::as_const(m_versions)) {
+            const QVariantMap release = entry.toMap();
+            if (release.value(QStringLiteral("version")).toString() == version) {
+                url = QUrl(release.value(QStringLiteral("downloadUrl")).toString());
+                m_expectedHash = release.value(QStringLiteral("sha256")).toByteArray();
+                break;
+            }
+        }
+        fileName = QFileInfo(url.path()).fileName();
+        if (!url.isValid() || fileName.isEmpty() || m_expectedHash.size() != 64) {
+            setError(tr("找不到 Flutter %1 的官方安装包信息").arg(version));
+            return;
+        }
+    }
+
+    m_downloadPath = directory + u'/' + fileName;
     m_downloadFile.setFileName(m_downloadPath + QStringLiteral(".part"));
     if (!m_downloadFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
         setError(tr("无法写入下载文件：%1").arg(m_downloadFile.errorString()));
@@ -204,10 +292,12 @@ void ProviderController::download(const QString &providerId, const QString &vers
 
     setError({});
     setProgress(0.0);
-    setStatus(tr("正在下载 Node.js %1…").arg(version));
+    setStatus(tr("正在下载 %1 %2…")
+                  .arg(providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
+                                                            : QStringLiteral("Flutter"),
+                       version));
     setBusy(true);
 
-    const QUrl url(QString::fromLatin1(nodeDistBase) + u'v' + version + u'/' + nodeFileName(version));
     m_reply = m_network.get(QNetworkRequest(url));
     connect(m_reply, &QNetworkReply::readyRead, this, [this] {
         if (m_reply) {
@@ -232,7 +322,10 @@ void ProviderController::download(const QString &providerId, const QString &vers
             return;
         }
         reply->deleteLater();
-        fetchNodeChecksum();
+        if (m_providerId == QStringLiteral("node"))
+            fetchNodeChecksum();
+        else
+            verifyDownloadedFile(m_expectedHash);
     });
 }
 
@@ -266,6 +359,10 @@ void ProviderController::setDefaultVersion(const QString &providerId, const QStr
         return;
     }
     if (m_defaultVersions.value(providerId).toString() == version) {
+        return;
+    }
+    if (providerId == QStringLiteral("flutter")) {
+        installAndActivateFlutter(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -322,7 +419,11 @@ void ProviderController::verifyNodeDownload(const QByteArray &checksumDocument)
         fail(tr("官方校验清单中没有找到目标文件"));
         return;
     }
+    verifyDownloadedFile(expectedHash);
+}
 
+void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
+{
     QFile file(m_downloadFile.fileName());
     if (!file.open(QIODevice::ReadOnly)) {
         fail(tr("无法读取下载文件进行校验"));
@@ -361,7 +462,10 @@ void ProviderController::verifyNodeDownload(const QByteArray &checksumDocument)
     }
 
     setProgress(1.0);
-    setStatus(tr("Node.js %1 下载并校验完成").arg(m_version));
+    setStatus(tr("%1 %2 下载并校验完成")
+                  .arg(m_providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
+                                                               : QStringLiteral("Flutter"),
+                       m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
 }
@@ -502,6 +606,129 @@ bool ProviderController::activateNode(const QString &version)
     }
     setError({});
     setStatus(tr("Node.js %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
+void ProviderController::installAndActivateFlutter(const QString &version)
+{
+    const QString flutterBat = installDirectory(QStringLiteral("flutter"), version)
+        + QStringLiteral("/bin/flutter.bat");
+    if (QFileInfo(flutterBat).isFile()) {
+        if (!activateFlutter(version))
+            setError(tr("无法激活 Flutter %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+
+    QFile manifest(downloadManifestPath(QStringLiteral("flutter"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("Flutter %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive = downloadDirectory(QStringLiteral("flutter"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("Flutter %1 下载文件不存在").arg(version));
+        return;
+    }
+
+    const QString installsRoot =
+        QFileInfo(installDirectory(QStringLiteral("flutter"), version)).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if (staging.exists() && !staging.removeRecursively()) {
+        setError(tr("无法清理上次未完成的 Flutter 解压目录"));
+        return;
+    }
+    if (!QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 Flutter 安装目录"));
+        return;
+    }
+
+    m_pendingInstallVersion = version;
+    if (m_providerId != QStringLiteral("flutter")) {
+        m_providerId = QStringLiteral("flutter");
+        emit activeProviderChanged();
+    }
+    if (m_version != version) {
+        m_version = version;
+        emit activeVersionChanged();
+    }
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 Flutter %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            const QString details =
+                QString::fromLocal8Bit(m_installProcess.readAllStandardError()).trimmed();
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("解压 Flutter 失败：%1").arg(details));
+            return;
+        }
+
+        const QString extracted = m_pendingStagingPath + QStringLiteral("/flutter");
+        const QString destination =
+            installDirectory(QStringLiteral("flutter"), m_pendingInstallVersion);
+        if (!QFileInfo(extracted).isDir()) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("Flutter 压缩包目录结构无效"));
+            return;
+        }
+        if (QFileInfo(destination).exists() || !QDir().rename(extracted, destination)) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法完成 Flutter 安装目录切换"));
+            return;
+        }
+        QDir(m_pendingStagingPath).removeRecursively();
+
+        if (!activateFlutter(m_pendingInstallVersion)) {
+            fail(tr("Flutter 已解压，但写入系统 PATH 失败"));
+            return;
+        }
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"), m_pendingStagingPath});
+}
+
+bool ProviderController::activateFlutter(const QString &version)
+{
+    const QString bin = installDirectory(QStringLiteral("flutter"), version)
+        + QStringLiteral("/bin");
+    if (!writeCommandShim(QStringLiteral("flutter"), bin + QStringLiteral("/flutter.bat"))
+        || !writeCommandShim(QStringLiteral("dart"), bin + QStringLiteral("/dart.bat"))
+        || !ensureShimPath()) {
+        return false;
+    }
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("flutter"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("Flutter %1 已设为系统默认版本；新终端中生效").arg(version));
     emit defaultVersionsChanged();
     return true;
 }

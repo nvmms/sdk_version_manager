@@ -57,7 +57,9 @@ private:
     void fail(const QString &message);
     void fetchNodeChecksum();
     void verifyNodeDownload(const QByteArray &checksumDocument);
+    void verifyDownloadedFile(const QByteArray &expectedHash);
     bool applyNodeIndex(const QByteArray &data);
+    bool applyFlutterIndex(const QByteArray &data);
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;
     QString downloadManifestPath(const QString &providerId, const QString &version) const;
@@ -68,6 +70,8 @@ private:
     bool saveDefaults();
     void installAndActivateNode(const QString &version);
     bool activateNode(const QString &version);
+    void installAndActivateFlutter(const QString &version);
+    bool activateFlutter(const QString &version);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);
     QString nodeFileName(const QString &version) const;
@@ -83,6 +87,7 @@ private:
     QString m_providerId;
     QString m_version;
     QString m_downloadPath;
+    QByteArray m_expectedHash;
     QVariantMap m_defaultVersions;
     QProcess m_installProcess;
     QString m_pendingInstallVersion;

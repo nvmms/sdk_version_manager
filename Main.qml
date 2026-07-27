@@ -79,6 +79,8 @@ ApplicationWindow {
             var matchesChannel = channelFilter === "all"
                     || (channelFilter === "lts" && channel.indexOf("lts") >= 0)
                     || (channelFilter === "current" && channel.indexOf("current") >= 0)
+                    || (channelFilter === "stable" && channel === "stable")
+                    || (channelFilter === "beta" && channel === "beta")
             if (matchesText && matchesChannel)
                 result.push(item)
         }
@@ -743,13 +745,27 @@ ApplicationWindow {
                                 }
                                 FilterButton {
                                     text: "LTS"
+                                    visible: window.selectedItem().key === "node"
                                     current: window.versionFilter === "lts"
                                     onClicked: window.versionFilter = "lts"
                                 }
                                 FilterButton {
                                     text: "Current"
+                                    visible: window.selectedItem().key === "node"
                                     current: window.versionFilter === "current"
                                     onClicked: window.versionFilter = "current"
+                                }
+                                FilterButton {
+                                    text: "Stable"
+                                    visible: window.selectedItem().key === "flutter"
+                                    current: window.versionFilter === "stable"
+                                    onClicked: window.versionFilter = "stable"
+                                }
+                                FilterButton {
+                                    text: "Beta"
+                                    visible: window.selectedItem().key === "flutter"
+                                    current: window.versionFilter === "beta"
+                                    onClicked: window.versionFilter = "beta"
                                 }
                             }
                         }
