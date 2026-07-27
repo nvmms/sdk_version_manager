@@ -7,7 +7,7 @@ on:
       - "v*"
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   QT_VERSION: "6.10.0"
@@ -81,8 +81,7 @@ jobs:
           $required = @(
             "release/bin/appsdk_version_manager.exe",
             "release/bin/svm.exe",
-            "release/bin/Qt6Core.dll",
-            "release/bin/platforms/qwindows.dll"
+            "release/bin/Qt6Core.dll"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path)) {
@@ -90,17 +89,22 @@ jobs:
             }
           }
 
-      - name: Create portable archive
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Compress-Archive `
-            -Path "release/*" `
-            -DestinationPath "dist/SVM-${{ steps.version.outputs.version }}-windows-${{ matrix.arch }}-portable.zip"
+          $platformPlugin = Get-ChildItem `
+            -Path "release" `
+            -Filter "qwindows.dll" `
+            -File `
+            -Recurse | Select-Object -First 1
+          if (-not $platformPlugin) {
+            Get-ChildItem -Path "release" -File -Recurse |
+              ForEach-Object { $_.FullName }
+            throw "Missing required Qt platform plugin: qwindows.dll"
+          }
+          Write-Host "Qt platform plugin: $($platformPlugin.FullName)"
 
       - name: Create NSIS installer from release directory
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
           $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
           if (-not $makensis) {
             $makensis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
@@ -124,16 +128,57 @@ jobs:
             throw "NSIS failed with exit code $LASTEXITCODE"
           }
 
-      - name: Upload release directory
-        uses: actions/upload-artifact@v4
-        with:
-          name: SVM-windows-${{ matrix.arch }}-release
-          path: release/
-          if-no-files-found: error
-
-      - name: Upload packages
+      - name: Stage packages for publishing
         uses: actions/upload-artifact@v4
         with:
           name: SVM-windows-${{ matrix.arch }}-packages
           path: dist/
           if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Download packages from all architectures
+        uses: actions/download-artifact@v4
+        with:
+          pattern: SVM-windows-*-packages
+          path: release-assets
+          merge-multiple: true
+
+      - name: Verify release assets
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart("v")
+          $expected = @(
+            "SVM-$version-windows-x64-setup.exe",
+            "SVM-$version-windows-arm64-setup.exe"
+          )
+
+          foreach ($name in $expected) {
+            $path = Join-Path "release-assets" $name
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Missing GitHub Release asset: $path"
+            }
+          }
+
+      - name: Create GitHub Release and upload files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${GITHUB_REF_NAME}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --clobber
+          else
+            gh release create "${GITHUB_REF_NAME}" release-assets/* \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "SDK Version Manager ${GITHUB_REF_NAME}" \
+              --generate-notes
+          fi
