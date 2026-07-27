@@ -4,7 +4,7 @@ project(sdk_version_manager VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network)
 
 qt_standard_project_setup(REQUIRES 6.10)
 
@@ -15,12 +15,15 @@ endif()
 
 qt_add_executable(appsdk_version_manager
     main.cpp
+    src/providercontroller.cpp
+    src/providercontroller.h
 )
 
 qt_add_qml_module(appsdk_version_manager
     URI sdk_version_manager
     QML_FILES
         Main.qml
+        ProviderCatalog.js
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
@@ -35,7 +38,7 @@ set_target_properties(appsdk_version_manager PROPERTIES
 )
 
 target_link_libraries(appsdk_version_manager
-    PRIVATE Qt6::Quick
+    PRIVATE Qt6::Quick Qt6::Network
 )
 
 install(TARGETS appsdk_version_manager
