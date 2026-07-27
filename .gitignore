@@ -1,0 +1,148 @@
+# =========================
+# Qt / Qt Creator
+# =========================
+
+# Qt Creator user settings
+*.user
+*.user.*
+*.qbs.user
+*.qbs.user.*
+*.pro.user
+*.pro.user.*
+*.pri.user
+
+# Qt Creator build directories
+build/
+cmake-build-*/
+out/
+
+# Qt Creator cache
+.qmake.stash
+.qmake.cache
+
+# Qt Creator session
+*.autosave
+*.creator.user
+*.creator.user.*
+
+# =========================
+# CMake
+# =========================
+
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+CTestTestfile.cmake
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# CMake generated files
+Makefile
+*.cmake
+
+# =========================
+# Build output
+# =========================
+
+# General binaries
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Object files
+*.o
+*.obj
+*.lo
+*.a
+*.lib
+
+# Debug symbols
+*.pdb
+*.ilk
+*.dSYM/
+
+# =========================
+# Qt generated files
+# =========================
+
+# MOC
+moc_*.cpp
+moc_*.h
+
+# UIC
+ui_*.h
+
+# RCC
+qrc_*.cpp
+
+# =========================
+# Visual Studio
+# =========================
+
+.vs/
+*.suo
+*.user
+*.VC.db
+*.VC.opendb
+
+# =========================
+# MinGW
+# =========================
+
+*.dll.a
+
+# =========================
+# Ninja
+# =========================
+
+.ninja_deps
+.ninja_log
+.ninja/
+
+# =========================
+# IDE
+# =========================
+
+.idea/
+.vscode/
+
+# =========================
+# OS generated
+# =========================
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Linux
+*~
+
+# =========================
+# Logs
+# =========================
+
+*.log
+
+# =========================
+# Temporary files
+# =========================
+
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+
+# =========================
+# Package files
+# =========================
+
+*.zip
+*.tar.gz
