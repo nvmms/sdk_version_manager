@@ -15,6 +15,8 @@ endif()
 
 qt_add_executable(appsdk_version_manager
     main.cpp
+    src/eventbus.cpp
+    src/eventbus.h
     src/providercontroller.cpp
     src/providercontroller.h
 )
@@ -24,6 +26,14 @@ qt_add_qml_module(appsdk_version_manager
     QML_FILES
         Main.qml
         ProviderCatalog.js
+)
+
+qt_add_executable(svm
+    cli/main.cpp
+    src/eventbus.cpp
+    src/eventbus.h
+    src/providercontroller.cpp
+    src/providercontroller.h
 )
 
 # Qt for iOS sets MACOSX_BUNDLE_GUI_IDENTIFIER automatically since Qt 6.1.
@@ -41,7 +51,11 @@ target_link_libraries(appsdk_version_manager
     PRIVATE Qt6::Quick Qt6::Network Qt6::Concurrent
 )
 
-install(TARGETS appsdk_version_manager
+target_link_libraries(svm
+    PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent
+)
+
+install(TARGETS appsdk_version_manager svm
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}

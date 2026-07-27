@@ -1,5 +1,7 @@
 #include "providercontroller.h"
+#include "eventbus.h"
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QtConcurrentRun>
 #include <QFutureWatcher>
@@ -12,6 +14,7 @@
 #include <QSaveFile>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QTimer>
 #include <QUrl>
 
 #include <utility>
@@ -31,6 +34,10 @@ ProviderController::ProviderController(QObject *parent)
     : QObject(parent)
 {
     loadDefaults();
+    const QString cliExecutable = QCoreApplication::applicationDirPath() + QStringLiteral("/svm.exe");
+    if (QFileInfo(cliExecutable).isFile())
+        writeCommandShim(QStringLiteral("svm"), cliExecutable);
+    ensureShimPath();
 }
 
 QVariantList ProviderController::versions() const { return m_versions; }
@@ -41,6 +48,73 @@ QString ProviderController::error() const { return m_error; }
 QString ProviderController::activeProvider() const { return m_providerId; }
 QString ProviderController::activeVersion() const { return m_version; }
 QVariantMap ProviderController::defaultVersions() const { return m_defaultVersions; }
+
+void ProviderController::startEventBus()
+{
+    if (m_eventBus)
+        return;
+    m_eventBus = new SvmEventBus(this);
+    connect(m_eventBus, &SvmEventBus::eventReceived, this, [this](const QJsonObject &event) {
+        const QString provider = event.value(QStringLiteral("provider")).toString();
+        const QString version = event.value(QStringLiteral("version")).toString();
+        const QString type = event.value(QStringLiteral("type")).toString();
+        if (provider.isEmpty() || version.isEmpty())
+            return;
+
+        const auto armExternalWatchdog = [this] {
+            const quint64 serial = ++m_externalEventSerial;
+            QTimer::singleShot(3500, this, [this, serial] {
+                if (m_busy && serial == m_externalEventSerial) {
+                    setStatus(tr("CLI 下载已停止，可再次执行命令继续下载"));
+                    setBusy(false);
+                }
+            });
+        };
+
+        if (m_providerId != provider) {
+            m_providerId = provider;
+            emit activeProviderChanged();
+        }
+        if (m_version != version) {
+            m_version = version;
+            emit activeVersionChanged();
+        }
+
+        if (type == QStringLiteral("download-start")) {
+            setError({});
+            setProgress(0.0);
+            setStatus(tr("CLI 正在下载 %1 %2…").arg(provider, version));
+            setBusy(true);
+            armExternalWatchdog();
+        } else if (type == QStringLiteral("download-progress")) {
+            setProgress(event.value(QStringLiteral("progress")).toDouble());
+            setBusy(true);
+            armExternalWatchdog();
+        } else if (type == QStringLiteral("heartbeat")) {
+            setProgress(event.value(QStringLiteral("progress")).toDouble());
+            setBusy(true);
+            armExternalWatchdog();
+        } else if (type == QStringLiteral("install-start")) {
+            setProgress(1.0);
+            setStatus(tr("CLI 正在安装 %1 %2…").arg(provider, version));
+            setBusy(true);
+            armExternalWatchdog();
+        } else if (type == QStringLiteral("done")) {
+            ++m_externalEventSerial;
+            setProgress(1.0);
+            setStatus(tr("CLI 已完成 %1 %2").arg(provider, version));
+            setBusy(false);
+            if (isDownloaded(provider, version))
+                emit downloadFinished(provider, version, downloadDirectory(provider, version));
+        } else if (type == QStringLiteral("error")) {
+            ++m_externalEventSerial;
+            setError(tr("CLI 下载或安装 %1 %2 失败").arg(provider, version));
+            setStatus({});
+            setBusy(false);
+        }
+    });
+    m_eventBus->start();
+}
 
 void ProviderController::loadVersions(const QString &providerId, bool forceRefresh)
 {
@@ -287,7 +361,10 @@ void ProviderController::download(const QString &providerId, const QString &vers
 
     m_downloadPath = directory + u'/' + fileName;
     m_downloadFile.setFileName(m_downloadPath + QStringLiteral(".part"));
-    if (!m_downloadFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    m_resumeOffset = QFileInfo(m_downloadFile.fileName()).size();
+    const QIODevice::OpenMode mode = QIODevice::WriteOnly
+        | (m_resumeOffset > 0 ? QIODevice::Append : QIODevice::Truncate);
+    if (!m_downloadFile.open(mode)) {
         setError(tr("无法写入下载文件：%1").arg(m_downloadFile.errorString()));
         return;
     }
@@ -300,7 +377,24 @@ void ProviderController::download(const QString &providerId, const QString &vers
                        version));
     setBusy(true);
 
-    m_reply = m_network.get(QNetworkRequest(url));
+    QNetworkRequest request(url);
+    if (m_resumeOffset > 0) {
+        request.setRawHeader("Range", "bytes=" + QByteArray::number(m_resumeOffset) + '-');
+    }
+    m_reply = m_network.get(request);
+    connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
+        if (!m_reply || m_resumeOffset <= 0)
+            return;
+        const int status =
+            m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 200) {
+            // The server ignored Range. Restart this response from byte zero
+            // instead of appending a complete file to the partial file.
+            m_downloadFile.resize(0);
+            m_downloadFile.seek(0);
+            m_resumeOffset = 0;
+        }
+    });
     connect(m_reply, &QNetworkReply::readyRead, this, [this] {
         if (m_reply) {
             m_downloadFile.write(m_reply->readAll());
@@ -308,7 +402,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     });
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
         if (total > 0) {
-            setProgress(static_cast<double>(received) / static_cast<double>(total));
+            setProgress(static_cast<double>(received + m_resumeOffset)
+                        / static_cast<double>(total + m_resumeOffset));
         }
     });
     connect(m_reply, &QNetworkReply::finished, this, [this] {
@@ -316,10 +411,21 @@ void ProviderController::download(const QString &providerId, const QString &vers
         m_reply = nullptr;
         m_downloadFile.write(reply->readAll());
         m_downloadFile.close();
+        const int status =
+            reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+        if (status == 416 && m_resumeOffset > 0) {
+            // A complete .part file can produce "range not satisfiable".
+            // Verify it normally instead of downloading it again.
+            reply->deleteLater();
+            if (m_providerId == QStringLiteral("node"))
+                fetchNodeChecksum();
+            else
+                verifyDownloadedFile(m_expectedHash);
+            return;
+        }
         if (reply->error() != QNetworkReply::NoError) {
             const QString message = reply->errorString();
             reply->deleteLater();
-            QFile::remove(m_downloadFile.fileName());
             fail(tr("下载失败：%1").arg(message));
             return;
         }
@@ -356,13 +462,20 @@ bool ProviderController::isDownloaded(const QString &providerId, const QString &
 
 void ProviderController::setDefaultVersion(const QString &providerId, const QString &version)
 {
+    installDownloaded(providerId, version, true);
+}
+
+void ProviderController::installDownloaded(const QString &providerId, const QString &version,
+                                           bool makeDefault)
+{
     if (!isDownloaded(providerId, version)) {
         setError(tr("必须先下载 %1 %2，才能设为默认版本").arg(providerId, version));
         return;
     }
-    if (m_defaultVersions.value(providerId).toString() == version) {
+    if (makeDefault && m_defaultVersions.value(providerId).toString() == version) {
         return;
     }
+    m_makeDefaultAfterInstall = makeDefault;
     if (providerId == QStringLiteral("flutter")) {
         installAndActivateFlutter(version);
         return;
@@ -574,7 +687,7 @@ void ProviderController::installAndActivateNode(const QString &version)
     const QString installedNode = installDirectory(QStringLiteral("node"), version)
         + QStringLiteral("/node.exe");
     if (QFileInfo(installedNode).isFile()) {
-        if (!activateNode(version)) {
+        if (m_makeDefaultAfterInstall && !activateNode(version)) {
             setError(tr("无法激活 Node.js %1").arg(version));
         }
         return;
@@ -653,7 +766,7 @@ void ProviderController::installAndActivateNode(const QString &version)
         }
         QDir(m_pendingStagingPath).removeRecursively();
 
-        if (!activateNode(m_pendingInstallVersion)) {
+        if (m_makeDefaultAfterInstall && !activateNode(m_pendingInstallVersion)) {
             fail(tr("Node.js 已解压，但写入系统 PATH 失败"));
             return;
         }
@@ -691,7 +804,7 @@ void ProviderController::installAndActivateFlutter(const QString &version)
     const QString flutterBat = installDirectory(QStringLiteral("flutter"), version)
         + QStringLiteral("/bin/flutter.bat");
     if (QFileInfo(flutterBat).isFile()) {
-        if (!activateFlutter(version))
+        if (m_makeDefaultAfterInstall && !activateFlutter(version))
             setError(tr("无法激活 Flutter %1").arg(version));
         return;
     }
@@ -776,7 +889,7 @@ void ProviderController::installAndActivateFlutter(const QString &version)
         }
         QDir(m_pendingStagingPath).removeRecursively();
 
-        if (!activateFlutter(m_pendingInstallVersion)) {
+        if (m_makeDefaultAfterInstall && !activateFlutter(m_pendingInstallVersion)) {
             fail(tr("Flutter 已解压，但写入系统 PATH 失败"));
             return;
         }

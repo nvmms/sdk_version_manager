@@ -10,6 +10,7 @@ int main(int argc, char *argv[])
 
     QQmlApplicationEngine engine;
     ProviderController providerController;
+    providerController.startEventBus();
     engine.rootContext()->setContextProperty(QStringLiteral("providerController"), &providerController);
     QObject::connect(
         &engine,

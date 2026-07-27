@@ -7,6 +7,7 @@
 #include <QVariantList>
 
 class QNetworkReply;
+class SvmEventBus;
 
 class ProviderController final : public QObject
 {
@@ -22,6 +23,7 @@ class ProviderController final : public QObject
 
 public:
     explicit ProviderController(QObject *parent = nullptr);
+    void startEventBus();
 
     QVariantList versions() const;
     bool busy() const;
@@ -35,6 +37,8 @@ public:
     Q_INVOKABLE void loadVersions(const QString &providerId, bool forceRefresh = false);
     Q_INVOKABLE void download(const QString &providerId, const QString &version);
     Q_INVOKABLE bool isDownloaded(const QString &providerId, const QString &version) const;
+    Q_INVOKABLE void installDownloaded(const QString &providerId, const QString &version,
+                                       bool makeDefault = false);
     Q_INVOKABLE void setDefaultVersion(const QString &providerId, const QString &version);
     Q_INVOKABLE void removeDownloaded(const QString &providerId, const QString &version);
     Q_INVOKABLE void cancel();
@@ -90,9 +94,13 @@ private:
     QString m_providerId;
     QString m_version;
     QString m_downloadPath;
+    qint64 m_resumeOffset = 0;
     QByteArray m_expectedHash;
     QVariantMap m_defaultVersions;
     QProcess m_installProcess;
     QString m_pendingInstallVersion;
     QString m_pendingStagingPath;
+    bool m_makeDefaultAfterInstall = false;
+    SvmEventBus *m_eventBus = nullptr;
+    quint64 m_externalEventSerial = 0;
 };

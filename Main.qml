@@ -90,8 +90,18 @@ ApplicationWindow {
         result.sort(function(left, right) {
             var leftDownloaded = isDownloaded(providerKey, left.version)
             var rightDownloaded = isDownloaded(providerKey, right.version)
-            if (leftDownloaded !== rightDownloaded)
-                return leftDownloaded ? -1 : 1
+            var leftDownloading = providerController.busy
+                    && providerController.activeProvider === providerKey
+                    && providerController.activeVersion === left.version
+                    && !leftDownloaded
+            var rightDownloading = providerController.busy
+                    && providerController.activeProvider === providerKey
+                    && providerController.activeVersion === right.version
+                    && !rightDownloaded
+            var leftPriority = leftDownloading ? 0 : leftDownloaded ? 1 : 2
+            var rightPriority = rightDownloading ? 0 : rightDownloaded ? 1 : 2
+            if (leftPriority !== rightPriority)
+                return leftPriority - rightPriority
             return compareVersionsDescending(left, right)
         })
         return result
