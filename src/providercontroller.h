@@ -36,6 +36,7 @@ public:
     Q_INVOKABLE void download(const QString &providerId, const QString &version);
     Q_INVOKABLE bool isDownloaded(const QString &providerId, const QString &version) const;
     Q_INVOKABLE void setDefaultVersion(const QString &providerId, const QString &version);
+    Q_INVOKABLE void removeDownloaded(const QString &providerId, const QString &version);
     Q_INVOKABLE void cancel();
 
 signals:
@@ -48,6 +49,7 @@ signals:
     void activeVersionChanged();
     void defaultVersionsChanged();
     void downloadFinished(const QString &providerId, const QString &version, const QString &path);
+    void downloadRemoved(const QString &providerId, const QString &version);
 
 private:
     void setBusy(bool busy);
@@ -72,6 +74,7 @@ private:
     bool activateNode(const QString &version);
     void installAndActivateFlutter(const QString &version);
     bool activateFlutter(const QString &version);
+    bool deactivateProvider(const QString &providerId);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);
     QString nodeFileName(const QString &version) const;

@@ -4,7 +4,7 @@ project(sdk_version_manager VERSION 0.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Quick Network)
+find_package(Qt6 REQUIRED COMPONENTS Quick Network Concurrent)
 
 qt_standard_project_setup(REQUIRES 6.10)
 
@@ -38,7 +38,7 @@ set_target_properties(appsdk_version_manager PROPERTIES
 )
 
 target_link_libraries(appsdk_version_manager
-    PRIVATE Qt6::Quick Qt6::Network
+    PRIVATE Qt6::Quick Qt6::Network Qt6::Concurrent
 )
 
 install(TARGETS appsdk_version_manager

@@ -20,6 +20,9 @@ ApplicationWindow {
     property string versionSearchText: ""
     property string versionFilter: "all"
     property string toastText: ""
+    property string pendingDeleteProvider: ""
+    property string pendingDeleteVersion: ""
+    property string pendingDeleteName: ""
     property var downloadedVersions: ({})
     property var sdkCatalog: Catalog.providersFor(currentSection)
     property var filteredCatalog: filterProviders(sdkCatalog, searchText)
@@ -154,6 +157,100 @@ ApplicationWindow {
         onTriggered: toastText = ""
     }
 
+    Dialog {
+        id: deleteDialog
+        anchors.centerIn: parent
+        width: 420
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        padding: 0
+
+        background: Rectangle {
+            radius: 12
+            color: "#151b24"
+            border.width: 1
+            border.color: "#343e4d"
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 0
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.margins: 22
+                spacing: 10
+
+                Text {
+                    text: qsTr("确认删除")
+                    color: "#f0f4fb"
+                    font.pixelSize: 18
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.WordWrap
+                    text: qsTr("确定删除 %1 %2？下载包和安装目录都会被删除。")
+                          .arg(window.pendingDeleteName)
+                          .arg(window.pendingDeleteVersion)
+                    color: "#a5b0c1"
+                    font.pixelSize: 13
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: providerController.defaultVersions[window.pendingDeleteProvider]
+                             === window.pendingDeleteVersion
+                    wrapMode: Text.WordWrap
+                    text: qsTr("这是当前默认版本，对应命令指向也会一并移除。")
+                    color: "#e6b86f"
+                    font.pixelSize: 12
+                }
+            }
+
+            Rectangle {
+                Layout.fillWidth: true
+                height: 1
+                color: "#2a3240"
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.margins: 14
+                spacing: 10
+                Item { Layout.fillWidth: true }
+
+                SecondaryButton {
+                    text: qsTr("取消")
+                    onClicked: deleteDialog.close()
+                }
+
+                Button {
+                    id: confirmDeleteButton
+                    implicitWidth: 92
+                    implicitHeight: 38
+
+                    contentItem: Text {
+                        text: qsTr("确认删除")
+                        color: "#fff1f1"
+                        font.pixelSize: 12
+                        font.weight: Font.DemiBold
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                    background: Rectangle {
+                        radius: 8
+                        color: confirmDeleteButton.pressed ? "#a93e49"
+                              : confirmDeleteButton.hovered ? "#d0505d" : "#bd4652"
+                    }
+                    onClicked: {
+                        deleteDialog.close()
+                        providerController.removeDownloaded(window.pendingDeleteProvider,
+                                                            window.pendingDeleteVersion)
+                    }
+                }
+            }
+        }
+    }
+
     Connections {
         target: providerController
 
@@ -162,6 +259,14 @@ ApplicationWindow {
             next[providerId + ":" + version] = true
             downloadedVersions = next
             toastText = qsTr("%1 %2 下载并校验完成").arg(providerId).arg(version)
+            toastTimer.restart()
+        }
+
+        function onDownloadRemoved(providerId, version) {
+            var next = Object.assign({}, downloadedVersions)
+            delete next[providerId + ":" + version]
+            downloadedVersions = next
+            toastText = qsTr("%1 %2 已删除").arg(providerId).arg(version)
             toastTimer.restart()
         }
 
@@ -1007,20 +1112,19 @@ ApplicationWindow {
                                                     id: downloadButton
                                                     Layout.preferredWidth: 102
                                                     implicitHeight: 36
-                                                    enabled: !versionRow.installed
-                                                             && !(providerController.busy
-                                                                  && providerController.activeProvider
-                                                                     === window.selectedItem().key)
+                                                    enabled: !providerController.busy
 
                                                     contentItem: Text {
-                                                        text: versionRow.installed ? qsTr("✓  已下载")
-                                                              : providerController.busy
+                                                        text: providerController.busy
                                                                 && providerController.activeProvider
                                                                    === window.selectedItem().key
                                                                 && providerController.activeVersion === modelData.version
-                                                              ? qsTr("%1%").arg(Math.round(providerController.progress * 100))
+                                                              ? versionRow.installed
+                                                                ? qsTr("删除中…")
+                                                                : qsTr("%1%").arg(Math.round(providerController.progress * 100))
+                                                              : versionRow.installed ? qsTr("删除")
                                                               : qsTr("↓  下载")
-                                                        color: versionRow.installed ? "#6cd39e" : "#08111b"
+                                                        color: versionRow.installed ? "#ef8b8b" : "#08111b"
                                                         font.pixelSize: 12
                                                         font.weight: Font.DemiBold
                                                         horizontalAlignment: Text.AlignHCenter
@@ -1029,15 +1133,27 @@ ApplicationWindow {
 
                                                     background: Rectangle {
                                                         radius: 8
-                                                        color: versionRow.installed ? "#14271f"
+                                                        color: versionRow.installed
+                                                              ? downloadButton.hovered ? "#3a1d22" : "#26171b"
                                                               : downloadButton.pressed ? "#6ab1ee"
                                                               : downloadButton.hovered ? "#9ed4ff" : "#83c7ff"
-                                                        border.width: versionRow.installed ? 1 : 0
-                                                        border.color: "#27523e"
+                                                    border.width: versionRow.installed ? 1 : 0
+                                                        border.color: "#633039"
                                                     }
 
-                                                    onClicked: window.download(window.selectedItem().key,
-                                                                               modelData.version)
+                                                    onClicked: {
+                                                        if (versionRow.installed) {
+                                                            window.pendingDeleteProvider =
+                                                                window.selectedItem().key
+                                                            window.pendingDeleteVersion = modelData.version
+                                                            window.pendingDeleteName =
+                                                                window.selectedItem().name
+                                                            deleteDialog.open()
+                                                        } else {
+                                                            window.download(window.selectedItem().key,
+                                                                            modelData.version)
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

@@ -1,6 +1,8 @@
 #include "providercontroller.h"
 
 #include <QCryptographicHash>
+#include <QtConcurrentRun>
+#include <QFutureWatcher>
 #include <QDir>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -372,6 +374,80 @@ void ProviderController::setDefaultVersion(const QString &providerId, const QStr
     installAndActivateNode(version);
 }
 
+void ProviderController::removeDownloaded(const QString &providerId, const QString &version)
+{
+    static const QRegularExpression safeId(QStringLiteral(R"(^[a-z0-9][a-z0-9-]*$)"));
+    static const QRegularExpression safeVersion(QStringLiteral(R"(^[0-9A-Za-z][0-9A-Za-z.-]*$)"));
+    if (!safeId.match(providerId).hasMatch() || !safeVersion.match(version).hasMatch()) {
+        setError(tr("Provider 或版本号无效"));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+    const bool removingDefault = m_defaultVersions.value(providerId).toString() == version;
+    if (removingDefault && !deactivateProvider(providerId)) {
+        setError(tr("无法移除 %1 %2 的系统 PATH 指向").arg(providerId, version));
+        return;
+    }
+
+    const QString downloadsRoot =
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+        + QStringLiteral("/downloads/");
+    const QString installsRoot =
+        QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
+        + QStringLiteral("/installs/");
+    const QString downloadPath = QDir::cleanPath(downloadDirectory(providerId, version));
+    const QString installPath = QDir::cleanPath(installDirectory(providerId, version));
+    if (!downloadPath.startsWith(QDir::cleanPath(downloadsRoot), Qt::CaseInsensitive)
+        || !installPath.startsWith(QDir::cleanPath(installsRoot), Qt::CaseInsensitive)) {
+        setError(tr("拒绝删除不安全的目录"));
+        return;
+    }
+
+    if (m_providerId != providerId) {
+        m_providerId = providerId;
+        emit activeProviderChanged();
+    }
+    if (m_version != version) {
+        m_version = version;
+        emit activeVersionChanged();
+    }
+    setError({});
+    setStatus(tr("正在删除 %1 %2…").arg(providerId, version));
+    setProgress(0.0);
+    setBusy(true);
+
+    auto *watcher = new QFutureWatcher<bool>(this);
+    connect(watcher, &QFutureWatcher<bool>::finished, this,
+            [this, watcher, providerId, version, removingDefault] {
+        const bool removed = watcher->result();
+        watcher->deleteLater();
+        setBusy(false);
+        if (!removed) {
+            setError(tr("无法完整删除 %1 %2，请检查文件是否被占用").arg(providerId, version));
+            setStatus({});
+            return;
+        }
+        setProgress(1.0);
+        setError({});
+        setStatus(removingDefault
+                      ? tr("%1 %2 及其系统 PATH 指向已删除").arg(providerId, version)
+                      : tr("%1 %2 已删除").arg(providerId, version));
+        emit downloadRemoved(providerId, version);
+    });
+    watcher->setFuture(QtConcurrent::run([downloadPath, installPath] {
+        QDir downloadDir(downloadPath);
+        QDir installDir(installPath);
+        const bool downloadRemoved =
+            !downloadDir.exists() || downloadDir.removeRecursively();
+        const bool installRemoved =
+            !installDir.exists() || installDir.removeRecursively();
+        return downloadRemoved && installRemoved;
+    }));
+}
+
 void ProviderController::cancel()
 {
     if (m_reply) {
@@ -731,6 +807,33 @@ bool ProviderController::activateFlutter(const QString &version)
     setStatus(tr("Flutter %1 已设为系统默认版本；新终端中生效").arg(version));
     emit defaultVersionsChanged();
     return true;
+}
+
+bool ProviderController::deactivateProvider(const QString &providerId)
+{
+    QStringList shimNames;
+    if (providerId == QStringLiteral("node"))
+        shimNames = {QStringLiteral("node"), QStringLiteral("npm"), QStringLiteral("npx")};
+    else if (providerId == QStringLiteral("flutter"))
+        shimNames = {QStringLiteral("flutter"), QStringLiteral("dart")};
+    else
+        return false;
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.remove(providerId);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+
+    bool removed = true;
+    for (const QString &name : std::as_const(shimNames)) {
+        const QString path = shimDirectory() + u'/' + name + QStringLiteral(".cmd");
+        if (QFileInfo(path).exists() && !QFile::remove(path))
+            removed = false;
+    }
+    emit defaultVersionsChanged();
+    return removed;
 }
 
 bool ProviderController::writeCommandShim(const QString &name, const QString &target)
