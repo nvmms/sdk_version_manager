@@ -3,6 +3,8 @@ name: Windows release
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "agent/test-windows-release"
     tags:
       - "v*"
 
@@ -81,14 +83,25 @@ jobs:
           $required = @(
             "release/bin/appsdk_version_manager.exe",
             "release/bin/svm.exe",
-            "release/bin/Qt6Core.dll",
-            "release/bin/platforms/qwindows.dll"
+            "release/bin/Qt6Core.dll"
           )
           foreach ($path in $required) {
             if (-not (Test-Path -LiteralPath $path)) {
               throw "Missing required release file: $path"
             }
           }
+
+          $platformPlugin = Get-ChildItem `
+            -Path "release" `
+            -Filter "qwindows.dll" `
+            -File `
+            -Recurse | Select-Object -First 1
+          if (-not $platformPlugin) {
+            Get-ChildItem -Path "release" -File -Recurse |
+              ForEach-Object { $_.FullName }
+            throw "Missing required Qt platform plugin: qwindows.dll"
+          }
+          Write-Host "Qt platform plugin: $($platformPlugin.FullName)"
 
       - name: Create portable archive
         shell: pwsh
