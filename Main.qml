@@ -32,6 +32,15 @@ ApplicationWindow {
                                     ? providerController.versions : selectedItem().versions
     property var filteredVersions: filterVersions(displayedVersions, versionSearchText, versionFilter)
 
+    Component.onCompleted: {
+        if (currentSection === "download")
+            providerController.loadVersions(selectedItem().key)
+    }
+
+    function hasVersionProvider(providerKey) {
+        return providerKey === "flutter" || providerKey === "node"
+    }
+
     function filterProviders(source, query) {
         var normalized = String(query || "").trim().toLowerCase()
         if (normalized.length === 0)
@@ -68,6 +77,11 @@ ApplicationWindow {
         versionFilter = "all"
         searchField.clear()
         versionSearchField.clear()
+        if (sectionKey === "download") {
+            Qt.callLater(function() {
+                providerController.loadVersions(selectedItem().key)
+            })
+        }
     }
 
     function filterVersions(source, query, channelFilter) {
@@ -970,7 +984,9 @@ ApplicationWindow {
                                                   && providerController.activeProvider === window.selectedItem().key
                                                   ? qsTr("正在刷新 %1 版本").arg(window.selectedItem().name)
                                                   : window.displayedVersions.length === 0
-                                                  ? qsTr("%1 Provider 即将支持").arg(window.selectedItem().name)
+                                                  ? window.hasVersionProvider(window.selectedItem().key)
+                                                    ? qsTr("暂无可显示的 %1 版本").arg(window.selectedItem().name)
+                                                    : qsTr("%1 Provider 即将支持").arg(window.selectedItem().name)
                                                   : qsTr("没有匹配的版本")
                                             color: "#aab5c6"
                                             font.pixelSize: 13
@@ -981,7 +997,9 @@ ApplicationWindow {
                                                   && providerController.activeProvider === window.selectedItem().key
                                                   ? qsTr("正在读取官方版本索引，请稍候")
                                                   : window.displayedVersions.length === 0
-                                                  ? qsTr("目录已预留，接入 Provider 后会自动显示版本")
+                                                  ? window.hasVersionProvider(window.selectedItem().key)
+                                                    ? qsTr("请点击右上角“刷新版本”重新获取")
+                                                    : qsTr("目录已预留，接入 Provider 后会自动显示版本")
                                                   : qsTr("请更改搜索词或通道筛选")
                                             color: "#626f82"
                                             font.pixelSize: 11
