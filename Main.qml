@@ -25,18 +25,22 @@ ApplicationWindow {
     property string pendingDeleteName: ""
     property string pendingUnverifiedVersion: ""
     property string pendingUnverifiedProvider: ""
+    property string pendingVersionProvider: ""
+    property int providerLoadGeneration: 0
     property var downloadedVersions: ({})
     property var sdkCatalog: Catalog.providersFor(currentSection)
     property var filteredCatalog: filterProviders(sdkCatalog, searchText)
     property var sectionInfo: Catalog.section(currentSection)
-    property var displayedVersions: providerController.activeProvider === selectedItem().key
-                                    && providerController.versions.length > 0
-                                    ? providerController.versions : selectedItem().versions
+    property bool selectedProviderLoading: pendingVersionProvider === selectedItem().key
+    property var displayedVersions: hasVersionProvider(selectedItem().key)
+                                    ? providerController.activeProvider === selectedItem().key
+                                      ? providerController.versions : []
+                                    : selectedItem().versions
     property var filteredVersions: filterVersions(displayedVersions, versionSearchText, versionFilter)
 
     Component.onCompleted: {
         if (currentSection === "download")
-            providerController.loadVersions(selectedItem().key)
+            requestProviderLoad(selectedItem().key)
     }
 
     function hasVersionProvider(providerKey) {
@@ -68,10 +72,22 @@ ApplicationWindow {
                 versionSearchText = ""
                 versionFilter = "all"
                 versionSearchField.clear()
-                providerController.loadVersions(providerKey)
+                requestProviderLoad(providerKey)
                 return
             }
         }
+    }
+
+    function requestProviderLoad(providerKey) {
+        pendingVersionProvider = providerKey
+        providerLoadGeneration += 1
+        var generation = providerLoadGeneration
+        Qt.callLater(function() {
+            if (generation !== providerLoadGeneration
+                    || selectedItem().key !== providerKey)
+                return
+            providerController.loadVersions(providerKey)
+        })
     }
 
     function selectSection(sectionKey) {
@@ -83,9 +99,7 @@ ApplicationWindow {
         searchField.clear()
         versionSearchField.clear()
         if (sectionKey === "download") {
-            Qt.callLater(function() {
-                providerController.loadVersions(selectedItem().key)
-            })
+            requestProviderLoad(selectedItem().key)
         }
     }
 
@@ -316,6 +330,18 @@ ApplicationWindow {
     Connections {
         target: providerController
 
+        function onVersionsChanged() {
+            if (providerController.versions.length > 0
+                    && providerController.activeProvider === window.pendingVersionProvider)
+                window.pendingVersionProvider = ""
+        }
+
+        function onBusyChanged() {
+            if (!providerController.busy
+                    && providerController.activeProvider === window.pendingVersionProvider)
+                window.pendingVersionProvider = ""
+        }
+
         function onDownloadFinished(providerId, version, path) {
             var next = Object.assign({}, downloadedVersions)
             next[providerId + ":" + version] = true
@@ -334,6 +360,8 @@ ApplicationWindow {
 
         function onErrorChanged() {
             if (providerController.error !== "") {
+                if (providerController.activeProvider === window.pendingVersionProvider)
+                    window.pendingVersionProvider = ""
                 toastText = providerController.error
                 toastTimer.restart()
             }
@@ -1032,16 +1060,20 @@ ApplicationWindow {
 
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: providerController.busy
-                                                  && providerController.activeProvider === window.selectedItem().key
+                                            text: window.selectedProviderLoading
+                                                  || (providerController.busy
+                                                      && providerController.activeProvider
+                                                         === window.selectedItem().key)
                                                   ? "↻" : "◇"
                                             color: window.selectedItem().color
                                             font.pixelSize: 25
                                         }
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: providerController.busy
-                                                  && providerController.activeProvider === window.selectedItem().key
+                                            text: window.selectedProviderLoading
+                                                  || (providerController.busy
+                                                      && providerController.activeProvider
+                                                         === window.selectedItem().key)
                                                   ? qsTr("正在刷新 %1 版本").arg(window.selectedItem().name)
                                                   : window.displayedVersions.length === 0
                                                   ? window.hasVersionProvider(window.selectedItem().key)
@@ -1053,8 +1085,10 @@ ApplicationWindow {
                                         }
                                         Text {
                                             anchors.horizontalCenter: parent.horizontalCenter
-                                            text: providerController.busy
-                                                  && providerController.activeProvider === window.selectedItem().key
+                                            text: window.selectedProviderLoading
+                                                  || (providerController.busy
+                                                      && providerController.activeProvider
+                                                         === window.selectedItem().key)
                                                   ? qsTr("正在读取官方版本索引，请稍候")
                                                   : window.displayedVersions.length === 0
                                                   ? window.hasVersionProvider(window.selectedItem().key)
