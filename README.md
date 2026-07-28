@@ -67,6 +67,10 @@ svm use
 # 按解析规则选择版本并写入当前项目
 svm use node
 
+# 配置或查看 IDE 的项目 SDK 路径
+svm ide vscode
+svm ide idea
+
 # 查看本地缓存中的版本
 svm list
 svm list all node
@@ -79,6 +83,60 @@ svm node --version
 svm node app.js
 svm flutter doctor
 ```
+
+### IDE 配置
+
+SVM 使用 `.svm/sdks/<provider>` 作为稳定的项目级 SDK 路径。`svm use` 不猜测
+开发者使用的 IDE，也不自动创建 `.vscode` 或 `.idea`；它会列出 VS Code、
+IntelliJ IDEA 和 Android Studio 的配置方式。VS Code 可使用：
+
+```json
+{
+  "dart.flutterSdkPath": ".svm/sdks/flutter",
+  "python.defaultInterpreterPath": ".svm/sdks/python",
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-21",
+      "path": ".svm/sdks/java",
+      "default": true
+    }
+  ]
+}
+```
+
+只有 `.svmrc` 中已绑定的 Provider 才会写入对应配置。Java 运行时列表会合并已有项，
+不会清空用户配置。
+
+VS Code 没有通用的项目级 Node.js SDK 设置；`runtimeExecutable` 属于具体的
+`.vscode/launch.json` 启动配置，需要知道项目入口才能安全生成。Node.js 项目应使用
+`svm node ...` 执行，或在具体调试配置中将 `runtimeExecutable` 指向
+`${workspaceFolder}/.svm/sdks/node/node.exe`。
+
+IntelliJ IDEA / WebStorm 可在 **Settings > Languages & Frameworks > Node.js**
+中将 Node interpreter 设置为 `<项目>\.svm\sdks\node\node.exe`。Android Studio
+默认不提供 Node.js 项目支持；安装相应 JavaScript/Node.js 插件后可使用相同路径。
+
+也可以随时手动执行：
+
+```powershell
+svm ide vscode
+```
+
+显式创建或修复 VS Code 配置。该命令不会覆盖其他键。
+
+如果现有 `settings.json` 使用注释或尾随逗号等 JSONC 语法，SVM 会拒绝重写并显示需要
+手动添加的配置，避免破坏用户文件。
+
+IntelliJ IDEA 与 Android Studio 当前没有供 SVM 可靠修改的稳定项目级 Flutter SDK
+配置文件。执行 `svm ide idea` 会显示本项目解析后的路径；也可以在
+**Settings > Languages & Frameworks > Flutter** 中手动选择：
+
+```text
+<项目目录>\.svm\sdks\flutter
+```
+
+其他 IDE 也可以将 Flutter SDK 根目录指向 `.svm/sdks/flutter`。IDE 已打开时，
+修改配置后可能需要重新载入窗口或重启 IDE。
 
 `svm use <provider> [version]` 的版本选择顺序为：
 
@@ -98,6 +156,8 @@ svm flutter doctor
 - 使用 `.svmrc` 为项目绑定多个 SDK 版本；
 - 从当前目录向父目录查找最近的 `.svmrc`；
 - 通过 `svm node ...` 和 `svm flutter ...` 代理执行项目选定的 SDK；
+- `svm use` 输出常用 IDE 的项目 SDK 配置提示，但不自动写入 IDE 文件；
+- 通过 `svm ide vscode` 显式合并 VS Code 的 Flutter、Python 和 Java 配置；
 - GUI 与 CLI 通过本机 EventBus 同步任务状态；
 - 构建 Windows x64 / ARM64 安装程序。
 

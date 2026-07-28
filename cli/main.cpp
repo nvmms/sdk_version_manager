@@ -409,6 +409,204 @@ bool validToken(const QString &value)
 
 int commandActive();
 
+QString javaRuntimeName(const QString &version)
+{
+    const QStringList parts = version.split(u'.');
+    QString major = parts.value(0);
+    if (major == QStringLiteral("1") && parts.size() > 1)
+        major = parts[1];
+    return major.isEmpty() ? QStringLiteral("JavaSE") : QStringLiteral("JavaSE-") + major;
+}
+
+QJsonObject vscodeSettingsTemplate(const QJsonObject &sdks)
+{
+    QJsonObject settings;
+    if (sdks.contains(QStringLiteral("flutter"))) {
+        settings.insert(QStringLiteral("dart.flutterSdkPath"),
+                        QStringLiteral(".svm/sdks/flutter"));
+    }
+    if (sdks.contains(QStringLiteral("python"))) {
+        settings.insert(QStringLiteral("python.defaultInterpreterPath"),
+                        QStringLiteral(".svm/sdks/python"));
+    }
+    if (sdks.contains(QStringLiteral("java"))) {
+        settings.insert(
+            QStringLiteral("java.configuration.runtimes"),
+            QJsonArray{QJsonObject{
+                {QStringLiteral("name"),
+                 javaRuntimeName(sdks.value(QStringLiteral("java")).toString())},
+                {QStringLiteral("path"), QStringLiteral(".svm/sdks/java")},
+                {QStringLiteral("default"), true}
+            }});
+    }
+    return settings;
+}
+
+void printIdeConfigurationHints(const QString &projectRoot, const QJsonObject &sdks)
+{
+    const QJsonObject vscodeSettings = vscodeSettingsTemplate(sdks);
+    out << Qt::endl
+        << "IDE configuration (no IDE files were written):" << Qt::endl;
+    if (!vscodeSettings.isEmpty()) {
+        out << Qt::endl << "VS Code" << Qt::endl
+            << "Add or merge into "
+            << QDir(projectRoot).filePath(QStringLiteral(".vscode/settings.json"))
+            << ':' << Qt::endl
+            << QJsonDocument(vscodeSettings).toJson(QJsonDocument::Indented)
+            << "Apply explicitly: svm ide vscode" << Qt::endl;
+    }
+    if (sdks.contains(QStringLiteral("node"))) {
+        out << "For a VS Code Node.js launch configuration, set runtimeExecutable to:"
+            << Qt::endl;
+#ifdef Q_OS_WIN
+        out << "  ${workspaceFolder}/.svm/sdks/node/node.exe" << Qt::endl;
+#else
+        out << "  ${workspaceFolder}/.svm/sdks/node/bin/node" << Qt::endl;
+#endif
+    }
+    if (sdks.contains(QStringLiteral("flutter"))
+        || sdks.contains(QStringLiteral("java"))
+        || sdks.contains(QStringLiteral("python"))
+        || sdks.contains(QStringLiteral("node"))) {
+        const auto sdkPath = [&](const QString &provider) {
+            return QDir::toNativeSeparators(
+                QDir(projectRoot).filePath(QStringLiteral(".svm/sdks/") + provider));
+        };
+        out << Qt::endl << "IntelliJ IDEA" << Qt::endl;
+        if (sdks.contains(QStringLiteral("flutter"))) {
+            out << "Settings > Languages & Frameworks > Flutter > Flutter SDK path:"
+                << Qt::endl << "  " << sdkPath(QStringLiteral("flutter")) << Qt::endl;
+        }
+        if (sdks.contains(QStringLiteral("java"))) {
+            out << "Project Structure > SDKs > JDK home:" << Qt::endl
+                << "  " << sdkPath(QStringLiteral("java")) << Qt::endl;
+        }
+        if (sdks.contains(QStringLiteral("python"))) {
+            out << "Settings > Python Interpreter > Add local interpreter:"
+                << Qt::endl << "  " << sdkPath(QStringLiteral("python")) << Qt::endl;
+        }
+        if (sdks.contains(QStringLiteral("node"))) {
+            out << "Settings > Languages & Frameworks > Node.js > Node interpreter:"
+                << Qt::endl;
+#ifdef Q_OS_WIN
+            out << "  " << sdkPath(QStringLiteral("node")) << "\\node.exe" << Qt::endl;
+#else
+            out << "  " << sdkPath(QStringLiteral("node")) << "/bin/node" << Qt::endl;
+#endif
+        }
+        out << "Show again: svm ide idea" << Qt::endl
+            << Qt::endl << "Android Studio" << Qt::endl;
+        if (sdks.contains(QStringLiteral("flutter"))) {
+            out << "Settings > Languages & Frameworks > Flutter > Flutter SDK path:"
+                << Qt::endl << "  " << sdkPath(QStringLiteral("flutter")) << Qt::endl;
+        }
+        if (sdks.contains(QStringLiteral("java"))) {
+            out << "Settings > Build Tools > Gradle > Gradle JDK:"
+                << Qt::endl << "  " << sdkPath(QStringLiteral("java")) << Qt::endl;
+        }
+        if (sdks.contains(QStringLiteral("node"))) {
+            out << "Node.js requires the JavaScript/Node.js plugin; set its Node interpreter to:"
+                << Qt::endl;
+#ifdef Q_OS_WIN
+            out << "  " << sdkPath(QStringLiteral("node")) << "\\node.exe" << Qt::endl;
+#else
+            out << "  " << sdkPath(QStringLiteral("node")) << "/bin/node" << Qt::endl;
+#endif
+        }
+        out << "Show again: svm ide android-studio" << Qt::endl;
+    }
+}
+
+bool configureVSCode(const QString &projectRoot, const QJsonObject &sdks,
+                     QString *settingsPathResult, bool *changedResult,
+                     QString *errorMessage)
+{
+    if (changedResult)
+        *changedResult = false;
+    const bool hasConfigurableBinding =
+        sdks.contains(QStringLiteral("flutter"))
+        || sdks.contains(QStringLiteral("python"))
+        || sdks.contains(QStringLiteral("java"));
+    const QString settingsPath =
+        QDir(projectRoot).filePath(QStringLiteral(".vscode/settings.json"));
+
+    QJsonObject settings;
+    if (QFileInfo(settingsPath).exists()) {
+        QFile settingsFile(settingsPath);
+        if (!settingsFile.open(QIODevice::ReadOnly)) {
+            if (errorMessage)
+                *errorMessage = QStringLiteral("Failed to read %1").arg(settingsPath);
+            return false;
+        }
+        QJsonParseError parseError;
+        const QJsonDocument document =
+            QJsonDocument::fromJson(settingsFile.readAll(), &parseError);
+        if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+            if (errorMessage) {
+                *errorMessage =
+                    QStringLiteral("Cannot safely update %1: %2. Add "
+                                   "\"dart.flutterSdkPath\": \".svm/sdks/flutter\" manually.")
+                        .arg(settingsPath, parseError.errorString());
+            }
+            return false;
+        }
+        settings = document.object();
+    }
+    const QJsonObject originalSettings = settings;
+
+    if (sdks.contains(QStringLiteral("flutter"))) {
+        settings.insert(QStringLiteral("dart.flutterSdkPath"),
+                        QStringLiteral(".svm/sdks/flutter"));
+    } else if (settings.value(QStringLiteral("dart.flutterSdkPath")).toString()
+               == QStringLiteral(".svm/sdks/flutter")) {
+        settings.remove(QStringLiteral("dart.flutterSdkPath"));
+    }
+    if (sdks.contains(QStringLiteral("python"))) {
+        settings.insert(QStringLiteral("python.defaultInterpreterPath"),
+                        QStringLiteral(".svm/sdks/python"));
+    } else if (settings.value(QStringLiteral("python.defaultInterpreterPath")).toString()
+               == QStringLiteral(".svm/sdks/python")) {
+        settings.remove(QStringLiteral("python.defaultInterpreterPath"));
+    }
+    const QString javaPath = QStringLiteral(".svm/sdks/java");
+    const QJsonArray runtimes = settings.value(QStringLiteral("java.configuration.runtimes"))
+                                    .toArray();
+    QJsonArray merged;
+    for (const QJsonValue &value : runtimes) {
+        if (value.toObject().value(QStringLiteral("path")).toString() != javaPath)
+            merged.append(value);
+    }
+    if (sdks.contains(QStringLiteral("java"))) {
+        merged.append(QJsonObject{
+            {QStringLiteral("name"),
+             javaRuntimeName(sdks.value(QStringLiteral("java")).toString())},
+            {QStringLiteral("path"), javaPath},
+            {QStringLiteral("default"), true}
+        });
+        settings.insert(QStringLiteral("java.configuration.runtimes"), merged);
+    } else if (merged.size() != runtimes.size()) {
+        if (merged.isEmpty())
+            settings.remove(QStringLiteral("java.configuration.runtimes"));
+        else
+            settings.insert(QStringLiteral("java.configuration.runtimes"), merged);
+    }
+    if (settings == originalSettings) {
+        if (settingsPathResult)
+            *settingsPathResult = hasConfigurableBinding ? settingsPath : QString();
+        return true;
+    }
+    if (!writeObject(settingsPath, settings)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Failed to update %1").arg(settingsPath);
+        return false;
+    }
+    if (changedResult)
+        *changedResult = true;
+    if (settingsPathResult)
+        *settingsPathResult = settingsPath;
+    return true;
+}
+
 int commandInit(const QStringList &arguments)
 {
     Q_UNUSED(arguments)
@@ -532,7 +730,10 @@ int commandUse(const QStringList &arguments)
             << installedVersionDirectory(provider, version) << Qt::endl;
         return 1;
     }
+    const QJsonObject sdks = readObject(projectConfigPath(root))
+                                  .value(QStringLiteral("sdks")).toObject();
     out << provider << ' ' << version << " is now active for " << root << Qt::endl;
+    printIdeConfigurationHints(root, sdks);
     return 0;
 }
 
@@ -576,7 +777,97 @@ int commandActive()
         out << "  none" << Qt::endl;
     for (auto it = defaults.constBegin(); it != defaults.constEnd(); ++it)
         out << "  " << it.key() << ": " << it.value().toString() << Qt::endl;
+    if (!projectRoot.isEmpty()) {
+        const QJsonObject sdks = readObject(projectConfigPath(projectRoot))
+                                      .value(QStringLiteral("sdks")).toObject();
+        printIdeConfigurationHints(projectRoot, sdks);
+    }
     return mappingsHealthy ? 0 : 1;
+}
+
+int commandIde(const QStringList &arguments)
+{
+    if (arguments.isEmpty()) {
+        out << "IDE integrations:" << Qt::endl
+            << "  vscode         configure .vscode/settings.json" << Qt::endl
+            << "  idea           show IntelliJ IDEA setup instructions" << Qt::endl
+            << "  android-studio show Android Studio setup instructions" << Qt::endl;
+        return 0;
+    }
+    if (arguments.size() != 1) {
+        err << "Usage: svm ide [vscode|idea|android-studio]" << Qt::endl;
+        return 2;
+    }
+
+    const QString projectRoot = findProjectRoot(QDir::currentPath());
+    if (projectRoot.isEmpty()) {
+        err << "No SVM project found. Run `svm init` first." << Qt::endl;
+        return 3;
+    }
+    const QJsonObject sdks = readObject(projectConfigPath(projectRoot))
+                                  .value(QStringLiteral("sdks")).toObject();
+    if (sdks.isEmpty()) {
+        err << "This project has no SDK bindings. Run `svm use <provider> <version>` first."
+            << Qt::endl;
+        return 3;
+    }
+
+    for (auto it = sdks.constBegin(); it != sdks.constEnd(); ++it) {
+        if (installedExecutable(it.key(), it.value().toString()).isEmpty())
+            continue;
+        QString mappingError;
+        if (!syncProjectSdkMapping(projectRoot, it.key(), it.value().toString(),
+                                   &mappingError)) {
+            err << "Failed to synchronize .svm/sdks/" << it.key() << ": "
+                << mappingError << Qt::endl;
+            return 1;
+        }
+    }
+
+    const QString ide = arguments[0].toLower();
+    if (ide == QStringLiteral("vscode") || ide == QStringLiteral("code")) {
+        QString settingsPath;
+        bool settingsChanged = false;
+        QString ideError;
+        if (!configureVSCode(projectRoot, sdks, &settingsPath, &settingsChanged,
+                             &ideError)) {
+            err << ideError << Qt::endl;
+            return 1;
+        }
+        if (settingsPath.isEmpty()) {
+            out << "No provider-specific VS Code workspace setting is required. "
+                   "Run Node.js commands through `svm node ...`."
+                << Qt::endl;
+            return 0;
+        }
+        out << "VS Code: " << (settingsChanged ? "updated " : "already configured ")
+            << settingsPath << Qt::endl
+            << "  Applied settings for project SDK bindings." << Qt::endl;
+        return 0;
+    }
+
+    if (ide == QStringLiteral("idea") || ide == QStringLiteral("intellij")
+        || ide == QStringLiteral("android-studio")
+        || ide == QStringLiteral("androidstudio")) {
+        const QString displayName =
+            (ide == QStringLiteral("android-studio")
+             || ide == QStringLiteral("androidstudio"))
+            ? QStringLiteral("Android Studio") : QStringLiteral("IntelliJ IDEA");
+        out << displayName
+            << " does not expose a stable project file for all SDK settings."
+            << Qt::endl;
+        for (auto it = sdks.constBegin(); it != sdks.constEnd(); ++it) {
+            out << "  " << it.key() << ": "
+                << QDir::toNativeSeparators(
+                       QDir(projectRoot).filePath(QStringLiteral(".svm/sdks/") + it.key()))
+                << Qt::endl;
+        }
+        return 0;
+    }
+
+    err << "Unsupported IDE: " << ide
+        << ". Use vscode, idea, or android-studio." << Qt::endl;
+    return 2;
 }
 
 QVariantList cachedVersions(const QString &provider)
@@ -801,10 +1092,12 @@ void printHelp()
            "Usage:\n"
            "  svm init\n"
            "  svm use [provider [version]]\n"
+           "  svm ide [vscode|idea|android-studio]\n"
            "  svm list [filter] [provider]\n"
            "  svm <provider> [arguments...]\n\n"
            "Examples:\n"
            "  svm use node 24.18.0\n"
+           "  svm ide vscode\n"
            "  svm list lts node\n"
            "  svm node --version\n"
            "  svm flutter doctor\n";
@@ -829,6 +1122,8 @@ int main(int argc, char *argv[])
         return commandInit(arguments);
     if (command == QStringLiteral("use"))
         return commandUse(arguments);
+    if (command == QStringLiteral("ide"))
+        return commandIde(arguments);
     if (command == QStringLiteral("list"))
         return commandList(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter"))
