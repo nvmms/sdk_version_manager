@@ -15,6 +15,16 @@
 #include <QTimer>
 #include <QVersionNumber>
 
+#include <cstring>
+#include <filesystem>
+#include <system_error>
+#include <vector>
+
+#ifdef Q_OS_WIN
+#include <qt_windows.h>
+#include <winioctl.h>
+#endif
+
 #include "../src/eventbus.h"
 #include "../src/providercontroller.h"
 
@@ -82,6 +92,160 @@ QString installedExecutable(const QString &provider, const QString &version)
     if (provider == QStringLiteral("flutter"))
         return root + QStringLiteral("/bin/flutter.bat");
     return {};
+}
+
+QString installedVersionDirectory(const QString &provider, const QString &version)
+{
+    return QDir::cleanPath(dataRoot() + QStringLiteral("/installs/") + provider + u'/' + version);
+}
+
+std::filesystem::path filesystemPath(const QString &path)
+{
+#ifdef Q_OS_WIN
+    return std::filesystem::path(path.toStdWString());
+#else
+    return std::filesystem::path(path.toStdString());
+#endif
+}
+
+bool createDirectoryLink(const QString &target, const QString &link, QString *errorMessage)
+{
+#ifdef Q_OS_WIN
+    const auto linkPath = reinterpret_cast<LPCWSTR>(link.utf16());
+    const auto targetPath = reinterpret_cast<LPCWSTR>(target.utf16());
+    // 0x2 requests unprivileged link creation when Windows Developer Mode is enabled.
+    if (CreateSymbolicLinkW(linkPath, targetPath, SYMBOLIC_LINK_FLAG_DIRECTORY | 0x2)) {
+        return true;
+    }
+    DWORD windowsError = GetLastError();
+    if (windowsError == ERROR_INVALID_PARAMETER
+        && CreateSymbolicLinkW(linkPath, targetPath, SYMBOLIC_LINK_FLAG_DIRECTORY)) {
+        return true;
+    }
+    windowsError = GetLastError();
+
+    // Directory junctions do not require the symbolic-link privilege.
+    if (windowsError == ERROR_PRIVILEGE_NOT_HELD) {
+        QString substituteName = QDir::toNativeSeparators(QFileInfo(target).absoluteFilePath());
+        if (substituteName.startsWith(QStringLiteral("\\\\")))
+            substituteName = QStringLiteral("\\??\\UNC\\") + substituteName.mid(2);
+        else
+            substituteName.prepend(QStringLiteral("\\??\\"));
+        const QString printName = QDir::toNativeSeparators(QFileInfo(target).absoluteFilePath());
+        const USHORT substituteBytes = USHORT(substituteName.size() * sizeof(wchar_t));
+        const USHORT printBytes = USHORT(printName.size() * sizeof(wchar_t));
+        const USHORT pathBytes =
+            USHORT(substituteBytes + sizeof(wchar_t) + printBytes + sizeof(wchar_t));
+        constexpr DWORD headerBytes = 8;
+        constexpr DWORD mountPointHeaderBytes = 8;
+        std::vector<BYTE> buffer(headerBytes + mountPointHeaderBytes + pathBytes, 0);
+        auto writeWord = [&](DWORD offset, USHORT value) {
+            memcpy(buffer.data() + offset, &value, sizeof(value));
+        };
+        const DWORD tag = IO_REPARSE_TAG_MOUNT_POINT;
+        memcpy(buffer.data(), &tag, sizeof(tag));
+        writeWord(4, USHORT(mountPointHeaderBytes + pathBytes));
+        writeWord(8, 0);
+        writeWord(10, substituteBytes);
+        writeWord(12, USHORT(substituteBytes + sizeof(wchar_t)));
+        writeWord(14, printBytes);
+        memcpy(buffer.data() + headerBytes + mountPointHeaderBytes,
+               substituteName.utf16(), substituteBytes);
+        memcpy(buffer.data() + headerBytes + mountPointHeaderBytes
+                   + substituteBytes + sizeof(wchar_t),
+               printName.utf16(), printBytes);
+
+        if (CreateDirectoryW(linkPath, nullptr)) {
+            HANDLE directory =
+                CreateFileW(linkPath, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+                            FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+            if (directory != INVALID_HANDLE_VALUE) {
+                DWORD returnedBytes = 0;
+                const BOOL created =
+                    DeviceIoControl(directory, FSCTL_SET_REPARSE_POINT, buffer.data(),
+                                    DWORD(buffer.size()), nullptr, 0, &returnedBytes, nullptr);
+                const DWORD junctionError = created ? ERROR_SUCCESS : GetLastError();
+                CloseHandle(directory);
+                if (created)
+                    return true;
+                RemoveDirectoryW(linkPath);
+                windowsError = junctionError;
+            } else {
+                windowsError = GetLastError();
+                RemoveDirectoryW(linkPath);
+            }
+        } else {
+            windowsError = GetLastError();
+        }
+    }
+    if (errorMessage) {
+        *errorMessage =
+            QStringLiteral("Windows could not create a directory link or junction (error %1).")
+                .arg(windowsError);
+    }
+    return false;
+#else
+    std::error_code error;
+    std::filesystem::create_directory_symlink(filesystemPath(target), filesystemPath(link), error);
+    if (!error)
+        return true;
+    if (errorMessage)
+        *errorMessage = QString::fromLocal8Bit(error.message());
+    return false;
+#endif
+}
+
+bool syncProjectSdkMapping(const QString &root, const QString &provider, const QString &version,
+                           QString *errorMessage)
+{
+    const QString target = installedVersionDirectory(provider, version);
+    const QString mappingsRoot = QDir(root).filePath(QStringLiteral(".svm/sdks"));
+    const QString link = QDir(mappingsRoot).filePath(provider);
+    if (!QFileInfo(target).isDir()) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Installed SDK directory does not exist: %1").arg(target);
+        return false;
+    }
+    if (!QDir().mkpath(mappingsRoot)) {
+        if (errorMessage)
+            *errorMessage = QStringLiteral("Failed to create %1").arg(mappingsRoot);
+        return false;
+    }
+
+    const std::filesystem::path linkPath = filesystemPath(link);
+    std::error_code error;
+    const std::filesystem::file_status status = std::filesystem::symlink_status(linkPath, error);
+    if (!error && std::filesystem::exists(status)) {
+        bool isDirectoryLink = std::filesystem::is_symlink(status);
+#ifdef Q_OS_WIN
+        const DWORD attributes =
+            GetFileAttributesW(reinterpret_cast<LPCWSTR>(link.utf16()));
+        isDirectoryLink =
+            isDirectoryLink
+            || (attributes != INVALID_FILE_ATTRIBUTES
+                && (attributes & FILE_ATTRIBUTE_DIRECTORY)
+                && (attributes & FILE_ATTRIBUTE_REPARSE_POINT));
+#endif
+        if (!isDirectoryLink) {
+            if (errorMessage) {
+                *errorMessage =
+                    QStringLiteral("Refusing to replace non-link path: %1").arg(link);
+            }
+            return false;
+        }
+        std::filesystem::remove(linkPath, error);
+        if (error) {
+            if (errorMessage)
+                *errorMessage = QString::fromLocal8Bit(error.message());
+            return false;
+        }
+    } else if (error && error != std::errc::no_such_file_or_directory) {
+        if (errorMessage)
+            *errorMessage = QString::fromLocal8Bit(error.message());
+        return false;
+    }
+
+    return createDirectoryLink(target, link, errorMessage);
 }
 
 QString globalDefaultVersion(const QString &provider)
@@ -359,6 +523,15 @@ int commandUse(const QStringList &arguments)
         err << "Failed to update " << projectConfigPath(root) << Qt::endl;
         return 1;
     }
+    QString mappingError;
+    if (!syncProjectSdkMapping(root, provider, version, &mappingError)) {
+        err << "Updated " << projectConfigPath(root)
+            << ", but failed to create the project SDK mapping: " << mappingError << Qt::endl;
+        err << "Expected mapping: "
+            << QDir(root).filePath(QStringLiteral(".svm/sdks/") + provider) << " -> "
+            << installedVersionDirectory(provider, version) << Qt::endl;
+        return 1;
+    }
     out << provider << ' ' << version << " is now active for " << root << Qt::endl;
     return 0;
 }
@@ -366,14 +539,31 @@ int commandUse(const QStringList &arguments)
 int commandActive()
 {
     const QString projectRoot = findProjectRoot(QDir::currentPath());
+    bool mappingsHealthy = true;
     if (!projectRoot.isEmpty()) {
         const QJsonObject sdks = readObject(projectConfigPath(projectRoot))
                                       .value(QStringLiteral("sdks")).toObject();
         out << "Project: " << projectRoot << Qt::endl;
         if (sdks.isEmpty())
             out << "  No project SDK bindings." << Qt::endl;
-        for (auto it = sdks.constBegin(); it != sdks.constEnd(); ++it)
-            out << "  " << it.key() << ": " << it.value().toString() << " (project)" << Qt::endl;
+        for (auto it = sdks.constBegin(); it != sdks.constEnd(); ++it) {
+            const QString provider = it.key();
+            const QString version = it.value().toString();
+            out << "  " << provider << ": " << version << " (project)" << Qt::endl;
+            if (!validToken(provider) || !validToken(version)
+                || installedExecutable(provider, version).isEmpty()) {
+                mappingsHealthy = false;
+                err << "  Cannot synchronize invalid or unsupported binding: "
+                    << provider << ' ' << version << Qt::endl;
+                continue;
+            }
+            QString mappingError;
+            if (!syncProjectSdkMapping(projectRoot, provider, version, &mappingError)) {
+                mappingsHealthy = false;
+                err << "  Failed to synchronize .svm/sdks/" << provider << ": "
+                    << mappingError << Qt::endl;
+            }
+        }
     } else {
         out << "Project: none" << Qt::endl;
     }
@@ -386,7 +576,7 @@ int commandActive()
         out << "  none" << Qt::endl;
     for (auto it = defaults.constBegin(); it != defaults.constEnd(); ++it)
         out << "  " << it.key() << ": " << it.value().toString() << Qt::endl;
-    return 0;
+    return mappingsHealthy ? 0 : 1;
 }
 
 QVariantList cachedVersions(const QString &provider)

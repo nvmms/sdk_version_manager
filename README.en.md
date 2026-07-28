@@ -108,6 +108,13 @@ The currently supported CLI provider IDs are `node` and `flutter`.
 - Creates a commit-friendly `.svmrc`;
 - Creates `.svm/` for machine-local generated files;
 - Adds `.svm/` to `.gitignore` without duplicating it.
+- `svm use` creates `.svm/sdks/<provider>` as a project-local directory link to the
+  globally managed version. The link is rebuildable from `.svmrc` and is not the
+  source of truth for version resolution.
+- Running `svm use` without arguments also checks and repairs missing or stale
+  project-local directory links while displaying the active bindings.
+- On Windows, SVM falls back to a directory junction when symbolic-link privileges
+  are unavailable, without requiring administrator access.
 
 Example `.svmrc`:
 

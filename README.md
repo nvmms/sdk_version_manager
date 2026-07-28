@@ -108,6 +108,10 @@ svm flutter doctor
 - 创建可提交到版本控制的 `.svmrc`；
 - 创建用于本机生成内容的 `.svm/`；
 - 将 `.svm/` 添加到 `.gitignore`（不会重复添加）。
+- `svm use` 在 `.svm/sdks/<provider>` 创建指向全局受管理版本的项目级目录链接；
+  该链接可随时根据 `.svmrc` 重建，不是版本解析的事实来源。
+- 无参数 `svm use` 在显示当前绑定时也会检查并修复缺失或过期的项目级目录链接。
+- Windows 无符号链接权限时自动回退为目录联接（junction），无需管理员权限。
 
 `.svmrc` 示例：
 
