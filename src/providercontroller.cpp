@@ -38,6 +38,8 @@ constexpr auto phpIndexUrl = "https://windows.php.net/downloads/releases/release
 constexpr auto phpDistBase = "https://windows.php.net/downloads/releases/";
 constexpr auto phpArchiveUrl = "https://windows.php.net/downloads/releases/archives/";
 constexpr auto goIndexUrl = "https://go.dev/dl/?mode=json&include=all";
+constexpr auto postgresqlIndexUrl =
+    "https://www.postgresql.org/versions.json";
 constexpr auto goDistBase = "https://go.dev/dl/";
 }
 
@@ -133,7 +135,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
-        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")) {
+        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")
+        && providerId != QStringLiteral("postgresql")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -166,7 +169,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                 : providerId == QStringLiteral("java") ? applyJavaIndex(data)
                 : providerId == QStringLiteral("python") ? applyPythonIndex(data)
                 : providerId == QStringLiteral("php") ? applyPhpIndex(data)
-                                                      : applyGoIndex(data);
+                : providerId == QStringLiteral("go") ? applyGoIndex(data)
+                                                     : applyPostgresqlIndex(data);
             if (applied && phpCacheHasArchives) {
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
@@ -174,7 +178,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                     : providerId == QStringLiteral("java") ? QStringLiteral("Java")
                     : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                     : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
-                                                          : QStringLiteral("Go")));
+                    : providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                                                         : QStringLiteral("PostgreSQL")));
                 return;
             }
         }
@@ -187,7 +192,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         : providerId == QStringLiteral("java") ? QStringLiteral("Java")
         : providerId == QStringLiteral("python") ? QStringLiteral("Python")
         : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
-                                              : QStringLiteral("Go");
+        : providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                                             : QStringLiteral("PostgreSQL");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
@@ -199,7 +205,6 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         fetchPhpIndexes();
         return;
     }
-
     const QUrl indexUrl(providerId == QStringLiteral("node")
                             ? QString::fromLatin1(nodeIndexUrl)
                         : providerId == QStringLiteral("flutter")
@@ -208,6 +213,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                             ? QString::fromLatin1(pythonIndexUrl)
                         : providerId == QStringLiteral("php")
                             ? QString::fromLatin1(phpIndexUrl)
+                        : providerId == QStringLiteral("postgresql")
+                            ? QString::fromLatin1(postgresqlIndexUrl)
                             : QString::fromLatin1(goIndexUrl));
     m_reply = m_network.get(QNetworkRequest(indexUrl));
     connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
@@ -228,7 +235,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             : providerId == QStringLiteral("java") ? applyJavaIndex(data)
             : providerId == QStringLiteral("python") ? applyPythonIndex(data)
             : providerId == QStringLiteral("php") ? applyPhpIndex(data)
-                                                  : applyGoIndex(data);
+            : providerId == QStringLiteral("go") ? applyGoIndex(data)
+                                                 : applyPostgresqlIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -725,6 +733,45 @@ bool ProviderController::applyGoIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyPostgresqlIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray())
+        return false;
+    QVariantList versions;
+    for (const QJsonValue &value : document.array()) {
+        const QJsonObject release = value.toObject();
+        if (!release.value(QStringLiteral("supported")).toBool())
+            continue;
+        const QString major = release.value(QStringLiteral("major")).toString();
+        const QString minor = release.value(QStringLiteral("latestMinor")).toString();
+        if (major.toInt() < 13 || minor.isEmpty())
+            continue;
+        const QString version = major + u'.' + minor;
+        const QString fileName =
+            QStringLiteral("postgresql-%1-1-windows-x64-binaries.zip").arg(version);
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"), QStringLiteral("stable"));
+        item.insert(QStringLiteral("released"),
+                    release.value(QStringLiteral("relDate")).toString());
+        item.insert(QStringLiteral("size"), QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"),
+                    release.value(QStringLiteral("current")).toBool());
+        item.insert(QStringLiteral("downloadUrl"),
+                    QStringLiteral("https://get.enterprisedb.com/postgresql/%1").arg(fileName));
+        item.insert(QStringLiteral("verification"), QStringLiteral("unverified"));
+        item.insert(QStringLiteral("unverified"), true);
+        versions.append(item);
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -747,11 +794,13 @@ void ProviderController::download(const QString &providerId, const QString &vers
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
-        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")) {
+        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")
+        && providerId != QStringLiteral("postgresql")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
-    static const QRegularExpression safeVersion(QStringLiteral(R"(^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$)"));
+    static const QRegularExpression safeVersion(
+        QStringLiteral(R"(^\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?$)"));
     if (!safeVersion.match(version).hasMatch()) {
         setError(tr("%1 版本号无效").arg(providerId));
         return;
@@ -797,11 +846,16 @@ void ProviderController::download(const QString &providerId, const QString &vers
         const bool validVerification = m_expectedHash.size() == 64
             || (providerId == QStringLiteral("python")
                 && verification == QStringLiteral("authenticode"))
-            || (providerId == QStringLiteral("php")
+            || ((providerId == QStringLiteral("php")
+                 || providerId == QStringLiteral("postgresql"))
                 && verification == QStringLiteral("unverified") && allowUnverified);
-        if (providerId == QStringLiteral("php")
+        if ((providerId == QStringLiteral("php")
+             || providerId == QStringLiteral("postgresql"))
             && verification == QStringLiteral("unverified") && !allowUnverified) {
-            setError(tr("PHP %1 是无官方校验文件的历史归档；确认风险后才能安装").arg(version));
+            setError(tr("%1 %2 没有可自动校验的摘要；确认风险后才能安装")
+                         .arg(providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                                                                  : QStringLiteral("PostgreSQL"),
+                              version));
             return;
         }
         if (!verification.isEmpty())
@@ -812,7 +866,9 @@ void ProviderController::download(const QString &providerId, const QString &vers
                               : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                               : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                               : providerId == QStringLiteral("go") ? QStringLiteral("Go")
-                                                                       : QStringLiteral("Flutter"),
+                              : providerId == QStringLiteral("postgresql")
+                                  ? QStringLiteral("PostgreSQL")
+                                  : QStringLiteral("Flutter"),
                               version));
             return;
         }
@@ -836,7 +892,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
                        : providerId == QStringLiteral("java") ? QStringLiteral("Java")
                        : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                        : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
-                                                             : QStringLiteral("Go"),
+                       : providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                                                            : QStringLiteral("PostgreSQL"),
                        version));
     setBusy(true);
 
@@ -1012,6 +1069,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
     }
     if (providerId == QStringLiteral("go")) {
         installAndActivateGo(version);
+        return;
+    }
+    if (providerId == QStringLiteral("postgresql")) {
+        installPostgresql(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -1205,7 +1266,8 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
                        : m_providerId == QStringLiteral("java") ? QStringLiteral("Java")
                        : m_providerId == QStringLiteral("python") ? QStringLiteral("Python")
                        : m_providerId == QStringLiteral("php") ? QStringLiteral("PHP")
-                                                               : QStringLiteral("Go"),
+                       : m_providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                                                              : QStringLiteral("PostgreSQL"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
@@ -1213,17 +1275,21 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
 
 void ProviderController::recordUnverifiedDownload()
 {
+    const QString providerName = m_providerId == QStringLiteral("postgresql")
+        ? QStringLiteral("PostgreSQL")
+        : QStringLiteral("PHP");
     QFile file(m_downloadFile.fileName());
     if (!file.open(QIODevice::ReadOnly)) {
-        fail(tr("无法读取 PHP 历史归档以记录本地完整性"));
+        fail(tr("无法读取 %1 下载包以记录本地完整性").arg(providerName));
         return;
     }
     QCryptographicHash hash(QCryptographicHash::Sha256);
     if (!hash.addData(&file)) {
-        fail(tr("无法计算 PHP 历史归档的本地 SHA-256"));
+        fail(tr("无法计算 %1 下载包的本地 SHA-256").arg(providerName));
         return;
     }
-    setStatus(tr("PHP 历史归档没有官方校验文件；正在记录本地完整性基线…"));
+    setStatus(tr("%1 下载包没有可自动校验的摘要；正在记录本地完整性基线…")
+                  .arg(providerName));
     verifyDownloadedFile(hash.result().toHex());
 }
 
@@ -2016,6 +2082,137 @@ bool ProviderController::activateGo(const QString &version)
     return true;
 }
 
+void ProviderController::installPostgresql(const QString &version)
+{
+    const QString destination = installDirectory(QStringLiteral("postgresql"), version);
+    if (QFileInfo(destination + QStringLiteral("/bin/psql.exe")).isFile()) {
+        if (m_makeDefaultAfterInstall && !activatePostgresql(version))
+            setError(tr("无法激活 PostgreSQL %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+    QFile manifest(downloadManifestPath(QStringLiteral("postgresql"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("PostgreSQL %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive =
+        downloadDirectory(QStringLiteral("postgresql"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("PostgreSQL %1 下载文件不存在").arg(version));
+        return;
+    }
+    const QString installsRoot = QFileInfo(destination).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if (staging.exists() && !staging.removeRecursively()) {
+        setError(tr("无法清理上次未完成的 PostgreSQL 解压目录"));
+        return;
+    }
+    if (!QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 PostgreSQL 安装目录"));
+        return;
+    }
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("postgresql");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 PostgreSQL %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            const QString details =
+                QString::fromLocal8Bit(m_installProcess.readAllStandardError()).trimmed();
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("解压 PostgreSQL 失败：%1").arg(details));
+            return;
+        }
+        QDir staging(m_pendingStagingPath);
+        QString extracted = m_pendingStagingPath;
+        if (!QFileInfo(extracted + QStringLiteral("/bin/psql.exe")).isFile()) {
+            const QStringList roots = staging.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+            if (roots.size() == 1)
+                extracted = staging.filePath(roots.first());
+        }
+        if (!QFileInfo(extracted + QStringLiteral("/bin/psql.exe")).isFile()) {
+            staging.removeRecursively();
+            fail(tr("PostgreSQL 压缩包目录结构无效"));
+            return;
+        }
+        const QString destination =
+            installDirectory(QStringLiteral("postgresql"), m_pendingInstallVersion);
+        if (QFileInfo(destination).exists()
+            || !QDir().rename(extracted, destination)) {
+            staging.removeRecursively();
+            fail(tr("无法完成 PostgreSQL 安装目录切换"));
+            return;
+        }
+        staging.removeRecursively();
+        if (m_makeDefaultAfterInstall
+            && !activatePostgresql(m_pendingInstallVersion)) {
+            fail(tr("PostgreSQL 已解压，但写入系统 PATH 指向失败"));
+            return;
+        }
+        setStatus(tr("PostgreSQL %1 程序安装完成；创建实例后才能启动服务")
+                      .arg(m_pendingInstallVersion));
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"),
+                            m_pendingStagingPath});
+}
+
+bool ProviderController::activatePostgresql(const QString &version)
+{
+    const QString bin =
+        installDirectory(QStringLiteral("postgresql"), version) + QStringLiteral("/bin");
+    const QStringList commands{
+        QStringLiteral("psql"),       QStringLiteral("postgres"),
+        QStringLiteral("pg_ctl"),     QStringLiteral("initdb"),
+        QStringLiteral("createdb"),   QStringLiteral("dropdb"),
+        QStringLiteral("createuser"), QStringLiteral("dropuser"),
+        QStringLiteral("pg_dump"),    QStringLiteral("pg_restore"),
+        QStringLiteral("pg_isready")};
+    for (const QString &command : commands) {
+        if (!writeCommandShim(command, bin + u'/' + command + QStringLiteral(".exe")))
+            return false;
+    }
+    if (!ensureShimPath())
+        return false;
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("postgresql"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("PostgreSQL %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
 bool ProviderController::deactivateProvider(const QString &providerId)
 {
     QStringList shimNames;
@@ -2032,6 +2229,13 @@ bool ProviderController::deactivateProvider(const QString &providerId)
         shimNames = {QStringLiteral("php")};
     else if (providerId == QStringLiteral("go"))
         shimNames = {QStringLiteral("go"), QStringLiteral("gofmt")};
+    else if (providerId == QStringLiteral("postgresql"))
+        shimNames = {QStringLiteral("psql"), QStringLiteral("postgres"),
+                     QStringLiteral("pg_ctl"), QStringLiteral("initdb"),
+                     QStringLiteral("createdb"), QStringLiteral("dropdb"),
+                     QStringLiteral("createuser"), QStringLiteral("dropuser"),
+                     QStringLiteral("pg_dump"), QStringLiteral("pg_restore"),
+                     QStringLiteral("pg_isready")};
     else
         return false;
 

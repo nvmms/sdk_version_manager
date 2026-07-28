@@ -24,6 +24,7 @@ ApplicationWindow {
     property string pendingDeleteVersion: ""
     property string pendingDeleteName: ""
     property string pendingUnverifiedVersion: ""
+    property string pendingUnverifiedProvider: ""
     property var downloadedVersions: ({})
     property var sdkCatalog: Catalog.providersFor(currentSection)
     property var filteredCatalog: filterProviders(sdkCatalog, searchText)
@@ -42,6 +43,7 @@ ApplicationWindow {
         return providerKey === "flutter" || providerKey === "node"
                 || providerKey === "java" || providerKey === "python"
                 || providerKey === "php" || providerKey === "go"
+                || providerKey === "postgresql"
     }
 
     function filterProviders(source, query) {
@@ -288,15 +290,23 @@ ApplicationWindow {
         width: 460
         modal: true
         closePolicy: Popup.NoAutoClose
-        title: qsTr("安装未校验的 PHP 历史版本？")
+        title: window.pendingUnverifiedProvider === "postgresql"
+               ? qsTr("安装未自动校验的 PostgreSQL？")
+               : qsTr("安装未校验的 PHP 历史版本？")
         standardButtons: Dialog.Cancel | Dialog.Ok
-        onAccepted: window.download("php", window.pendingUnverifiedVersion, true)
+        onAccepted: window.download(window.pendingUnverifiedProvider,
+                                    window.pendingUnverifiedVersion, true)
 
         contentItem: Text {
             width: 420
             wrapMode: Text.WordWrap
             color: "#e6b86f"
-            text: qsTr("PHP %1 来自 PHP 官方历史归档，但官方没有提供 SHA-256 或签名文件。"
+            text: window.pendingUnverifiedProvider === "postgresql"
+                  ? qsTr("PostgreSQL %1 是 PostgreSQL 官方 Windows 页面推荐的 EDB x64 "
+                         + "二进制归档，但版本页没有提供可供 SVM 自动核对的摘要。"
+                         + "SVM 将通过 HTTPS 下载并记录本地 SHA-256。是否继续？")
+                    .arg(window.pendingUnverifiedVersion)
+                  : qsTr("PHP %1 来自 PHP 官方历史归档，但官方没有提供 SHA-256 或签名文件。"
                        + "SVM 只能通过 HTTPS 下载并记录本地完整性，无法验证发布者。"
                        + "该版本可能已经停止安全支持。是否仍要安装？")
                   .arg(window.pendingUnverifiedVersion)
@@ -1208,7 +1218,6 @@ ApplicationWindow {
 
                                                     contentItem: Text {
                                                         text: providerController.busy
-                                                                && providerController.removing
                                                                 && providerController.activeProvider
                                                                    === window.selectedItem().key
                                                                 && providerController.activeVersion === modelData.version
@@ -1244,6 +1253,8 @@ ApplicationWindow {
                                                             deleteDialog.open()
                                                         } else {
                                                             if (modelData.unverified === true) {
+                                                                window.pendingUnverifiedProvider =
+                                                                    window.selectedItem().key
                                                                 window.pendingUnverifiedVersion =
                                                                     modelData.version
                                                                 unverifiedPhpDialog.open()

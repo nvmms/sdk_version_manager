@@ -1,5 +1,11 @@
 # SDK Version Manager (SVM)
 
+## PostgreSQL Provider
+
+PostgreSQL Provider 从 PostgreSQL 官方 Windows 下载页推荐的 EDB 二进制归档源发现
+当前受支持版本，安装 Windows x64 ZIP 到 SVM 独立程序目录，并支持
+`svm postgresql --version` 代理 `psql`。程序安装不会初始化或删除数据库实例数据。
+
 简体中文 | [English](README.en.md)
 
 SDK Version Manager（SVM）是一个基于 Qt 6 的本地优先、跨平台开发环境管理工具。它通过桌面 GUI 和 `svm` 命令行统一管理项目使用的 SDK 版本。

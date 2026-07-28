@@ -81,8 +81,11 @@ private:
     bool applyPythonIndex(const QByteArray &data);
     bool applyPhpIndex(const QByteArray &data);
     bool applyGoIndex(const QByteArray &data);
+    bool applyPostgresqlIndex(const QByteArray &data);
     void fetchJavaIndexes();
     void fetchPhpIndexes();
+    void installPostgresql(const QString &version);
+    bool activatePostgresql(const QString &version);
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;
     QString downloadManifestPath(const QString &providerId, const QString &version) const;

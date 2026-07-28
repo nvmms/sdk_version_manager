@@ -100,6 +100,8 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/php.exe");
     if (provider == QStringLiteral("go"))
         return root + QStringLiteral("/bin/go.exe");
+    if (provider == QStringLiteral("postgresql"))
+        return root + QStringLiteral("/bin/psql.exe");
     return {};
 }
 
@@ -329,7 +331,7 @@ bool downloadAndInstall(const QString &provider, const QString &version,
 
     if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")
         || provider == QStringLiteral("python") || provider == QStringLiteral("php")
-        || provider == QStringLiteral("go")) {
+        || provider == QStringLiteral("go") || provider == QStringLiteral("postgresql")) {
         out << "Reading the " << provider << " version index..." << Qt::endl;
         controller.loadVersions(provider, false);
         waitUntilIdle(controller);
@@ -356,14 +358,14 @@ bool downloadAndInstall(const QString &provider, const QString &version,
         const bool interactive = false;
 #endif
         if (!interactive) {
-            err << "PHP " << version
+            err << provider << ' ' << version
                 << " has no official checksum or signature. Re-run with "
                    "`--allow-unverified-archive` to accept this risk."
                 << Qt::endl;
             return false;
         }
-        out << "Warning: PHP " << version
-            << " is an unsupported historical archive with no official checksum or signature."
+        out << "Warning: " << provider << ' ' << version
+            << " has no checksum that SVM can verify automatically."
             << Qt::endl
             << "SVM can only use HTTPS and record a local integrity hash. Continue? [y/N] "
             << Qt::flush;
@@ -379,7 +381,8 @@ bool downloadAndInstall(const QString &provider, const QString &version,
         : provider == QStringLiteral("java") ? QStringLiteral("Java")
         : provider == QStringLiteral("python") ? QStringLiteral("Python")
         : provider == QStringLiteral("php") ? QStringLiteral("PHP")
-                                             : QStringLiteral("Go");
+        : provider == QStringLiteral("go") ? QStringLiteral("Go")
+                                            : QStringLiteral("PostgreSQL");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -943,7 +946,8 @@ QVariantList cachedVersions(const QString &provider)
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
         return {};
-    const QJsonDocument document = QJsonDocument::fromJson(file.readAll());
+    const QByteArray data = file.readAll();
+    const QJsonDocument document = QJsonDocument::fromJson(data);
     QVariantList result;
 
     if (provider == QStringLiteral("node") && document.isArray()) {
@@ -1132,6 +1136,23 @@ QVariantList cachedVersions(const QString &provider)
             item.insert(QStringLiteral("date"), QStringLiteral("—"));
             result.append(item);
         }
+    } else if (provider == QStringLiteral("postgresql")) {
+        for (const QJsonValue &value : document.array()) {
+            const QJsonObject release = value.toObject();
+            if (!release.value(QStringLiteral("supported")).toBool())
+                continue;
+            const QString major = release.value(QStringLiteral("major")).toString();
+            const QString minor = release.value(QStringLiteral("latestMinor")).toString();
+            if (major.toInt() < 13 || minor.isEmpty())
+                continue;
+            const QString version = major + u'.' + minor;
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version);
+            item.insert(QStringLiteral("channel"), QStringLiteral("stable"));
+            item.insert(QStringLiteral("date"),
+                        release.value(QStringLiteral("relDate")).toString());
+            result.append(item);
+        }
     }
     return result;
 }
@@ -1153,7 +1174,8 @@ int commandList(const QStringList &arguments)
 {
     static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
                                        QStringLiteral("java"), QStringLiteral("python"),
-                                       QStringLiteral("php"), QStringLiteral("go")};
+                                       QStringLiteral("php"), QStringLiteral("go"),
+                                       QStringLiteral("postgresql")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1294,7 +1316,7 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
 
     if (provider == QStringLiteral("node") || provider == QStringLiteral("java")
         || provider == QStringLiteral("python") || provider == QStringLiteral("php")
-        || provider == QStringLiteral("go")) {
+        || provider == QStringLiteral("go") || provider == QStringLiteral("postgresql")) {
         process.start(executable, arguments);
     } else {
         for (const QString &argument : arguments) {
@@ -1343,6 +1365,7 @@ void printHelp()
            "  svm python --version\n"
            "  svm php --version\n"
            "  svm go version\n"
+           "  svm postgresql --version\n"
            "  svm use php 5.6.40-nts --allow-unverified-archive\n"
            "  svm flutter doctor\n";
 }
@@ -1372,7 +1395,8 @@ int main(int argc, char *argv[])
         return commandList(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
         || command == QStringLiteral("java") || command == QStringLiteral("python")
-        || command == QStringLiteral("php") || command == QStringLiteral("go"))
+        || command == QStringLiteral("php") || command == QStringLiteral("go")
+        || command == QStringLiteral("postgresql"))
         return proxyCommand(command, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;
