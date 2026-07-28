@@ -36,7 +36,8 @@ public:
     QVariantMap defaultVersions() const;
 
     Q_INVOKABLE void loadVersions(const QString &providerId, bool forceRefresh = false);
-    Q_INVOKABLE void download(const QString &providerId, const QString &version);
+    Q_INVOKABLE void download(const QString &providerId, const QString &version,
+                              bool allowUnverified = false);
     Q_INVOKABLE bool isDownloaded(const QString &providerId, const QString &version) const;
     Q_INVOKABLE void installDownloaded(const QString &providerId, const QString &version,
                                        bool makeDefault = false);
@@ -66,11 +67,14 @@ private:
     void verifyNodeDownload(const QByteArray &checksumDocument);
     void verifyDownloadedFile(const QByteArray &expectedHash);
     void verifyPythonDownload();
+    void recordUnverifiedDownload();
     bool applyNodeIndex(const QByteArray &data);
     bool applyFlutterIndex(const QByteArray &data);
     bool applyJavaIndex(const QByteArray &data);
     bool applyPythonIndex(const QByteArray &data);
+    bool applyPhpIndex(const QByteArray &data);
     void fetchJavaIndexes();
+    void fetchPhpIndexes();
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;
     QString downloadManifestPath(const QString &providerId, const QString &version) const;
@@ -87,6 +91,8 @@ private:
     bool activateJava(const QString &version);
     void installAndActivatePython(const QString &version);
     bool activatePython(const QString &version);
+    void installAndActivatePhp(const QString &version);
+    bool activatePhp(const QString &version);
     bool deactivateProvider(const QString &providerId);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);
@@ -106,6 +112,7 @@ private:
     QString m_downloadPath;
     qint64 m_resumeOffset = 0;
     QByteArray m_expectedHash;
+    QString m_verificationMode;
     QVariantMap m_defaultVersions;
     QProcess m_installProcess;
     QString m_pendingInstallVersion;

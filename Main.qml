@@ -23,6 +23,7 @@ ApplicationWindow {
     property string pendingDeleteProvider: ""
     property string pendingDeleteVersion: ""
     property string pendingDeleteName: ""
+    property string pendingUnverifiedVersion: ""
     property var downloadedVersions: ({})
     property var sdkCatalog: Catalog.providersFor(currentSection)
     property var filteredCatalog: filterProviders(sdkCatalog, searchText)
@@ -40,6 +41,7 @@ ApplicationWindow {
     function hasVersionProvider(providerKey) {
         return providerKey === "flutter" || providerKey === "node"
                 || providerKey === "java" || providerKey === "python"
+                || providerKey === "php"
     }
 
     function filterProviders(source, query) {
@@ -92,6 +94,7 @@ ApplicationWindow {
         for (var i = 0; i < source.length; ++i) {
             var item = source[i]
             var channel = String(item.channel || "").toLowerCase()
+            var buildType = String(item.buildType || "").toLowerCase()
             var matchesText = normalized.length === 0
                     || String(item.version).toLowerCase().indexOf(normalized) >= 0
             var matchesChannel = channelFilter === "all"
@@ -99,6 +102,9 @@ ApplicationWindow {
                     || (channelFilter === "current" && channel.indexOf("current") >= 0)
                     || (channelFilter === "stable" && channel === "stable")
                     || (channelFilter === "beta" && channel === "beta")
+                    || (channelFilter === "legacy" && channel === "legacy")
+                    || (channelFilter === "nts" && buildType === "nts")
+                    || (channelFilter === "ts" && buildType === "ts")
             if (matchesText && matchesChannel)
                 result.push(item)
         }
@@ -172,8 +178,8 @@ ApplicationWindow {
         return qsTr("使用  svm install %1 <version>  也可以从命令行安装。").arg(selectedItem().key)
     }
 
-    function download(sdkKey, version) {
-        providerController.download(sdkKey, version)
+    function download(sdkKey, version, allowUnverified) {
+        providerController.download(sdkKey, version, allowUnverified === true)
     }
 
     Timer {
@@ -273,6 +279,27 @@ ApplicationWindow {
                     }
                 }
             }
+        }
+    }
+
+    Dialog {
+        id: unverifiedPhpDialog
+        anchors.centerIn: parent
+        width: 460
+        modal: true
+        closePolicy: Popup.NoAutoClose
+        title: qsTr("安装未校验的 PHP 历史版本？")
+        standardButtons: Dialog.Cancel | Dialog.Ok
+        onAccepted: window.download("php", window.pendingUnverifiedVersion, true)
+
+        contentItem: Text {
+            width: 420
+            wrapMode: Text.WordWrap
+            color: "#e6b86f"
+            text: qsTr("PHP %1 来自 PHP 官方历史归档，但官方没有提供 SHA-256 或签名文件。"
+                       + "SVM 只能通过 HTTPS 下载并记录本地完整性，无法验证发布者。"
+                       + "该版本可能已经停止安全支持。是否仍要安装？")
+                  .arg(window.pendingUnverifiedVersion)
         }
     }
 
@@ -890,6 +917,7 @@ ApplicationWindow {
                                     text: "Stable"
                                     visible: window.selectedItem().key === "flutter"
                                              || window.selectedItem().key === "python"
+                                             || window.selectedItem().key === "php"
                                     current: window.versionFilter === "stable"
                                     onClicked: window.versionFilter = "stable"
                                 }
@@ -898,6 +926,24 @@ ApplicationWindow {
                                     visible: window.selectedItem().key === "flutter"
                                     current: window.versionFilter === "beta"
                                     onClicked: window.versionFilter = "beta"
+                                }
+                                FilterButton {
+                                    text: "NTS"
+                                    visible: window.selectedItem().key === "php"
+                                    current: window.versionFilter === "nts"
+                                    onClicked: window.versionFilter = "nts"
+                                }
+                                FilterButton {
+                                    text: "TS"
+                                    visible: window.selectedItem().key === "php"
+                                    current: window.versionFilter === "ts"
+                                    onClicked: window.versionFilter = "ts"
+                                }
+                                FilterButton {
+                                    text: "Legacy"
+                                    visible: window.selectedItem().key === "php"
+                                    current: window.versionFilter === "legacy"
+                                    onClicked: window.versionFilter = "legacy"
                                 }
                             }
                         }
@@ -1181,8 +1227,15 @@ ApplicationWindow {
                                                                 window.selectedItem().name
                                                             deleteDialog.open()
                                                         } else {
-                                                            window.download(window.selectedItem().key,
-                                                                            modelData.version)
+                                                            if (modelData.unverified === true) {
+                                                                window.pendingUnverifiedVersion =
+                                                                    modelData.version
+                                                                unverifiedPhpDialog.open()
+                                                            } else {
+                                                                window.download(
+                                                                    window.selectedItem().key,
+                                                                    modelData.version, false)
+                                                            }
                                                         }
                                                     }
                                                 }

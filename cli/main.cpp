@@ -10,6 +10,7 @@
 #include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSet>
 #include <QStandardPaths>
 #include <QTextStream>
 #include <QTimer>
@@ -95,6 +96,8 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/bin/java.exe");
     if (provider == QStringLiteral("python"))
         return root + QStringLiteral("/python.exe");
+    if (provider == QStringLiteral("php"))
+        return root + QStringLiteral("/php.exe");
     return {};
 }
 
@@ -270,8 +273,18 @@ QString latestInstalledVersion(const QString &provider)
         const QVersionNumber number = QVersionNumber::fromString(version, &suffixIndex);
         if (number.isNull())
             continue;
+        const bool preferNts =
+            provider == QStringLiteral("php")
+            && QVersionNumber::compare(number, bestNumber) == 0
+            && version.endsWith(QStringLiteral("-nts"))
+            && !best.endsWith(QStringLiteral("-nts"));
+        const bool phpVariantTie =
+            provider == QStringLiteral("php")
+            && QVersionNumber::compare(number, bestNumber) == 0;
         if (best.isEmpty() || QVersionNumber::compare(number, bestNumber) > 0
-            || (QVersionNumber::compare(number, bestNumber) == 0 && version > best)) {
+            || preferNts
+            || (QVersionNumber::compare(number, bestNumber) == 0
+                && !phpVariantTie && version > best)) {
             best = version;
             bestNumber = number;
         }
@@ -291,7 +304,8 @@ void waitUntilIdle(ProviderController &controller)
     loop.exec();
 }
 
-bool downloadAndInstall(const QString &provider, const QString &version)
+bool downloadAndInstall(const QString &provider, const QString &version,
+                        bool allowUnverifiedArchive = false)
 {
     ProviderController controller;
     const auto publish = [&](const QString &type, double progress = -1.0) {
@@ -312,7 +326,7 @@ bool downloadAndInstall(const QString &provider, const QString &version)
     heartbeat.start();
 
     if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python")) {
+        || provider == QStringLiteral("python") || provider == QStringLiteral("php")) {
         out << "Reading the " << provider << " version index..." << Qt::endl;
         controller.loadVersions(provider, false);
         waitUntilIdle(controller);
@@ -323,11 +337,45 @@ bool downloadAndInstall(const QString &provider, const QString &version)
         }
     }
 
+    bool unverifiedArchive = false;
+    for (const QVariant &entry : controller.versions()) {
+        const QVariantMap item = entry.toMap();
+        if (item.value(QStringLiteral("version")).toString() == version) {
+            unverifiedArchive = item.value(QStringLiteral("unverified")).toBool();
+            break;
+        }
+    }
+    if (unverifiedArchive && !allowUnverifiedArchive) {
+#ifdef Q_OS_WIN
+        const bool interactive =
+            GetFileType(GetStdHandle(STD_INPUT_HANDLE)) == FILE_TYPE_CHAR;
+#else
+        const bool interactive = false;
+#endif
+        if (!interactive) {
+            err << "PHP " << version
+                << " has no official checksum or signature. Re-run with "
+                   "`--allow-unverified-archive` to accept this risk."
+                << Qt::endl;
+            return false;
+        }
+        out << "Warning: PHP " << version
+            << " is an unsupported historical archive with no official checksum or signature."
+            << Qt::endl
+            << "SVM can only use HTTPS and record a local integrity hash. Continue? [y/N] "
+            << Qt::flush;
+        const QString answer = input.readLine().trimmed().toLower();
+        if (answer != QStringLiteral("y") && answer != QStringLiteral("yes"))
+            return false;
+        allowUnverifiedArchive = true;
+    }
+
     const QString displayName = provider == QStringLiteral("node")
         ? QStringLiteral("Node.js")
         : provider == QStringLiteral("flutter") ? QStringLiteral("Flutter")
         : provider == QStringLiteral("java") ? QStringLiteral("Java")
-                                             : QStringLiteral("Python");
+        : provider == QStringLiteral("python") ? QStringLiteral("Python")
+                                               : QStringLiteral("PHP");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -349,7 +397,7 @@ bool downloadAndInstall(const QString &provider, const QString &version)
                      &controller, renderProgress);
     publish(QStringLiteral("download-start"), 0.0);
     renderProgress();
-    controller.download(provider, version);
+    controller.download(provider, version, allowUnverifiedArchive);
     waitUntilIdle(controller);
     out << '\r';
     if (!controller.error().isEmpty() || !controller.isDownloaded(provider, version)) {
@@ -659,8 +707,11 @@ int commandInit(const QStringList &arguments)
     return 0;
 }
 
-int commandUse(const QStringList &arguments)
+int commandUse(const QStringList &rawArguments)
 {
+    QStringList arguments = rawArguments;
+    const bool allowUnverifiedArchive =
+        arguments.removeAll(QStringLiteral("--allow-unverified-archive")) > 0;
     if (arguments.isEmpty())
         return commandActive();
     if (arguments.size() == 1 && validToken(arguments[0])) {
@@ -699,7 +750,10 @@ int commandUse(const QStringList &arguments)
             source = QStringLiteral("requested");
         }
         out << provider << ": " << version << " (" << source << ')' << Qt::endl;
-        return commandUse({provider, version});
+        QStringList resolvedArguments{provider, version};
+        if (allowUnverifiedArchive)
+            resolvedArguments.append(QStringLiteral("--allow-unverified-archive"));
+        return commandUse(resolvedArguments);
     }
     if (arguments.size() != 2 || !validToken(arguments[0]) || !validToken(arguments[1])) {
         err << "Usage: svm use [provider [version]]" << Qt::endl;
@@ -721,7 +775,7 @@ int commandUse(const QStringList &arguments)
         return 2;
     }
     if (!QFileInfo(executable).isFile()) {
-        if (!downloadAndInstall(provider, version))
+        if (!downloadAndInstall(provider, version, allowUnverifiedArchive))
             return 3;
     }
 
@@ -972,6 +1026,70 @@ QVariantList cachedVersions(const QString &provider)
             item.insert(QStringLiteral("date"), QStringLiteral("—"));
             result.append(item);
         }
+    } else if (provider == QStringLiteral("php") && document.isObject()) {
+        const QJsonObject documentRoot = document.object();
+        const QJsonObject root = documentRoot.contains(QStringLiteral("current"))
+            ? documentRoot.value(QStringLiteral("current")).toObject()
+            : documentRoot;
+        QSet<QString> knownVersions;
+        for (auto releaseIt = root.constBegin(); releaseIt != root.constEnd(); ++releaseIt) {
+            const QJsonObject release = releaseIt.value().toObject();
+            const QString version = release.value(QStringLiteral("version")).toString();
+            const QStringList parts = version.split(u'.');
+            if (parts.size() < 3 || parts[0].toInt() != 8 || parts[1].toInt() < 1)
+                continue;
+            for (const QString &buildType :
+                 {QStringLiteral("nts"), QStringLiteral("ts")}) {
+                QJsonObject build;
+                for (auto buildIt = release.constBegin(); buildIt != release.constEnd();
+                     ++buildIt) {
+                    const bool matchingType = buildType == QStringLiteral("nts")
+                        ? buildIt.key().startsWith(QStringLiteral("nts-"))
+                        : buildIt.key().startsWith(QStringLiteral("ts-"));
+                    if (matchingType && buildIt.key().endsWith(QStringLiteral("-x64"))) {
+                        build = buildIt.value().toObject();
+                        break;
+                    }
+                }
+                const QJsonObject archive = build.value(QStringLiteral("zip")).toObject();
+                if (archive.value(QStringLiteral("path")).toString().isEmpty()
+                    || archive.value(QStringLiteral("sha256")).toString().size() != 64) {
+                    continue;
+                }
+                QVariantMap item;
+                item.insert(QStringLiteral("version"), version + u'-' + buildType);
+                item.insert(QStringLiteral("channel"),
+                            parts[1].toInt() >= 4 ? QStringLiteral("stable")
+                                                  : QStringLiteral("security"));
+                item.insert(QStringLiteral("buildType"), buildType);
+                item.insert(QStringLiteral("date"),
+                            build.value(QStringLiteral("mtime")).toString().left(10));
+                result.append(item);
+                knownVersions.insert(item.value(QStringLiteral("version")).toString());
+            }
+        }
+        static const QRegularExpression archivePattern(
+            QStringLiteral(
+                R"(php-(\d+\.\d+\.\d+)(-nts)?-Win32-[A-Za-z0-9]+-x64\.zip)"),
+            QRegularExpression::CaseInsensitiveOption);
+        QRegularExpressionMatchIterator matches = archivePattern.globalMatch(
+            documentRoot.value(QStringLiteral("archiveHtml")).toString());
+        while (matches.hasNext()) {
+            const QRegularExpressionMatch match = matches.next();
+            const QString baseVersion = match.captured(1);
+            const QString buildType =
+                match.captured(2).isEmpty() ? QStringLiteral("ts") : QStringLiteral("nts");
+            const QString version = baseVersion + u'-' + buildType;
+            if (knownVersions.contains(version))
+                continue;
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version);
+            item.insert(QStringLiteral("channel"), QStringLiteral("legacy"));
+            item.insert(QStringLiteral("buildType"), buildType);
+            item.insert(QStringLiteral("date"), QStringLiteral("—"));
+            result.append(item);
+            knownVersions.insert(version);
+        }
     }
     return result;
 }
@@ -992,7 +1110,8 @@ bool downloadedLocally(const QString &provider, const QString &version)
 int commandList(const QStringList &arguments)
 {
     static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
-                                       QStringLiteral("java"), QStringLiteral("python")};
+                                       QStringLiteral("java"), QStringLiteral("python"),
+                                       QStringLiteral("php")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1023,10 +1142,13 @@ int commandList(const QStringList &arguments)
     }
     const QStringList filters{QStringLiteral("all"), QStringLiteral("lts"),
                               QStringLiteral("current"), QStringLiteral("stable"),
-                              QStringLiteral("beta"), QStringLiteral("downloaded")};
+                              QStringLiteral("beta"), QStringLiteral("nts"),
+                              QStringLiteral("ts"), QStringLiteral("legacy"),
+                              QStringLiteral("downloaded")};
     if (!filters.contains(filter)) {
         err << "Unknown filter: " << filter
-            << ". Use all, lts, current, stable, beta, or downloaded." << Qt::endl;
+            << ". Use all, lts, current, stable, beta, nts, ts, legacy, or downloaded."
+            << Qt::endl;
         return 2;
     }
 
@@ -1047,6 +1169,7 @@ int commandList(const QStringList &arguments)
         const QString channel = item.value(QStringLiteral("channel")).toString();
         const bool downloaded = downloadedLocally(provider, version);
         const QString normalizedChannel = channel.toLower();
+        const QString buildType = item.value(QStringLiteral("buildType")).toString().toLower();
         const bool matches =
             filter == QStringLiteral("all")
             || (filter == QStringLiteral("lts") && normalizedChannel.contains(QStringLiteral("lts")))
@@ -1054,6 +1177,10 @@ int commandList(const QStringList &arguments)
                 && normalizedChannel.contains(QStringLiteral("current")))
             || (filter == QStringLiteral("stable") && normalizedChannel == QStringLiteral("stable"))
             || (filter == QStringLiteral("beta") && normalizedChannel == QStringLiteral("beta"))
+            || (filter == QStringLiteral("legacy")
+                && normalizedChannel == QStringLiteral("legacy"))
+            || (filter == QStringLiteral("nts") && buildType == QStringLiteral("nts"))
+            || (filter == QStringLiteral("ts") && buildType == QStringLiteral("ts"))
             || (filter == QStringLiteral("downloaded") && downloaded);
         if (!matches)
             continue;
@@ -1114,9 +1241,13 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
                            installedVersionDirectory(provider, version));
         process.setProcessEnvironment(environment);
     }
+    if (provider == QStringLiteral("php")) {
+        environment.insert(QStringLiteral("PHPRC"), installedVersionDirectory(provider, version));
+        process.setProcessEnvironment(environment);
+    }
 
     if (provider == QStringLiteral("node") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python")) {
+        || provider == QStringLiteral("python") || provider == QStringLiteral("php")) {
         process.start(executable, arguments);
     } else {
         for (const QString &argument : arguments) {
@@ -1152,6 +1283,7 @@ void printHelp()
            "Usage:\n"
            "  svm init\n"
            "  svm use [provider [version]]\n"
+           "  svm use php <legacy-version> --allow-unverified-archive\n"
            "  svm ide [vscode|idea|android-studio]\n"
            "  svm list [filter] [provider]\n"
            "  svm <provider> [arguments...]\n\n"
@@ -1162,6 +1294,8 @@ void printHelp()
            "  svm node --version\n"
            "  svm java --version\n"
            "  svm python --version\n"
+           "  svm php --version\n"
+           "  svm use php 5.6.40-nts --allow-unverified-archive\n"
            "  svm flutter doctor\n";
 }
 }
@@ -1189,7 +1323,8 @@ int main(int argc, char *argv[])
     if (command == QStringLiteral("list"))
         return commandList(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
-        || command == QStringLiteral("java") || command == QStringLiteral("python"))
+        || command == QStringLiteral("java") || command == QStringLiteral("python")
+        || command == QStringLiteral("php"))
         return proxyCommand(command, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;

@@ -13,6 +13,7 @@
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSharedPointer>
+#include <QSet>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -33,6 +34,9 @@ constexpr auto flutterIndexUrl =
     "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json";
 constexpr auto javaIndexBase = "https://api.adoptium.net/v3/assets/feature_releases/";
 constexpr auto pythonIndexUrl = "https://www.python.org/api/v2/downloads/release_file/?os=1";
+constexpr auto phpIndexUrl = "https://windows.php.net/downloads/releases/releases.json";
+constexpr auto phpDistBase = "https://windows.php.net/downloads/releases/";
+constexpr auto phpArchiveUrl = "https://windows.php.net/downloads/releases/archives/";
 }
 
 ProviderController::ProviderController(QObject *parent)
@@ -124,7 +128,8 @@ void ProviderController::startEventBus()
 void ProviderController::loadVersions(const QString &providerId, bool forceRefresh)
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
-        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")) {
+        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
+        && providerId != QStringLiteral("php")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -148,17 +153,22 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         QFile cache(cachePath(providerId));
         if (cache.open(QIODevice::ReadOnly)) {
             const QByteArray data = cache.readAll();
+            const bool phpCacheHasArchives =
+                providerId != QStringLiteral("php")
+                || QJsonDocument::fromJson(data).object().contains(QStringLiteral("archiveHtml"));
             const bool applied = providerId == QStringLiteral("node")
                 ? applyNodeIndex(data)
                 : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
                 : providerId == QStringLiteral("java") ? applyJavaIndex(data)
-                                                       : applyPythonIndex(data);
-            if (applied) {
+                : providerId == QStringLiteral("python") ? applyPythonIndex(data)
+                                                         : applyPhpIndex(data);
+            if (applied && phpCacheHasArchives) {
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                     : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                     : providerId == QStringLiteral("java") ? QStringLiteral("Java")
-                                                           : QStringLiteral("Python")));
+                    : providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                                                             : QStringLiteral("PHP")));
                 return;
             }
         }
@@ -169,7 +179,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         ? QStringLiteral("Node.js")
         : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
         : providerId == QStringLiteral("java") ? QStringLiteral("Java")
-                                               : QStringLiteral("Python");
+        : providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                                                 : QStringLiteral("PHP");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
@@ -177,12 +188,18 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         fetchJavaIndexes();
         return;
     }
+    if (providerId == QStringLiteral("php")) {
+        fetchPhpIndexes();
+        return;
+    }
 
     const QUrl indexUrl(providerId == QStringLiteral("node")
                             ? QString::fromLatin1(nodeIndexUrl)
                         : providerId == QStringLiteral("flutter")
                             ? QString::fromLatin1(flutterIndexUrl)
-                            : QString::fromLatin1(pythonIndexUrl));
+                        : providerId == QStringLiteral("python")
+                            ? QString::fromLatin1(pythonIndexUrl)
+                            : QString::fromLatin1(phpIndexUrl));
     m_reply = m_network.get(QNetworkRequest(indexUrl));
     connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
         QNetworkReply *reply = m_reply;
@@ -200,7 +217,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             ? applyNodeIndex(data)
             : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
             : providerId == QStringLiteral("java") ? applyJavaIndex(data)
-                                                   : applyPythonIndex(data);
+            : providerId == QStringLiteral("python") ? applyPythonIndex(data)
+                                                     : applyPhpIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -268,6 +286,63 @@ void ProviderController::fetchJavaIndexes()
             setStatus(errors->isEmpty()
                           ? tr("已从 Eclipse Adoptium 获取 %1 个 Java 版本").arg(m_versions.size())
                           : tr("已获取 %1 个 Java 版本；部分主版本暂不可用").arg(m_versions.size()));
+            setBusy(false);
+        });
+    }
+}
+
+void ProviderController::fetchPhpIndexes()
+{
+    auto current = QSharedPointer<QJsonObject>::create();
+    auto archiveHtml = QSharedPointer<QByteArray>::create();
+    auto remaining = QSharedPointer<int>::create(2);
+    auto errors = QSharedPointer<QStringList>::create();
+    const QList<QUrl> urls{QUrl(QString::fromLatin1(phpIndexUrl)),
+                           QUrl(QString::fromLatin1(phpArchiveUrl))};
+
+    for (int index = 0; index < urls.size(); ++index) {
+        QNetworkReply *reply = m_network.get(QNetworkRequest(urls[index]));
+        m_javaReplies.append(reply);
+        connect(reply, &QNetworkReply::finished, this,
+                [this, reply, index, current, archiveHtml, remaining, errors] {
+            if (reply->error() == QNetworkReply::NoError) {
+                const QByteArray body = reply->readAll();
+                if (index == 0) {
+                    const QJsonDocument document = QJsonDocument::fromJson(body);
+                    if (document.isObject())
+                        *current = document.object();
+                    else
+                        errors->append(tr("PHP 当前版本索引格式无效"));
+                } else {
+                    *archiveHtml = body;
+                }
+            } else {
+                errors->append(reply->errorString());
+            }
+            m_javaReplies.removeAll(reply);
+            reply->deleteLater();
+            if (--*remaining != 0)
+                return;
+
+            QJsonObject combined;
+            combined.insert(QStringLiteral("schemaVersion"), 1);
+            combined.insert(QStringLiteral("current"), *current);
+            combined.insert(QStringLiteral("archiveHtml"), QString::fromUtf8(*archiveHtml));
+            const QByteArray data =
+                QJsonDocument(combined).toJson(QJsonDocument::Compact);
+            if (!applyPhpIndex(data)) {
+                fail(tr("获取 PHP 版本失败：%1").arg(errors->join(u';')));
+                return;
+            }
+            QSaveFile cache(cachePath(QStringLiteral("php")));
+            QDir().mkpath(QFileInfo(cachePath(QStringLiteral("php"))).absolutePath());
+            if (cache.open(QIODevice::WriteOnly)) {
+                cache.write(data);
+                cache.commit();
+            }
+            setStatus(errors->isEmpty()
+                          ? tr("已获取 %1 个 PHP 当前及历史版本").arg(m_versions.size())
+                          : tr("已获取 %1 个 PHP 版本；部分索引暂不可用").arg(m_versions.size()));
             setBusy(false);
         });
     }
@@ -464,6 +539,115 @@ bool ProviderController::applyPythonIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyPhpIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        return false;
+
+    QVariantList versions;
+    const QJsonObject documentRoot = document.object();
+    const QJsonObject root = documentRoot.contains(QStringLiteral("current"))
+        ? documentRoot.value(QStringLiteral("current")).toObject()
+        : documentRoot;
+    QSet<QString> knownVersions;
+    int newestMinor = 0;
+    for (auto releaseIt = root.constBegin(); releaseIt != root.constEnd(); ++releaseIt) {
+        const QStringList parts =
+            releaseIt.value().toObject().value(QStringLiteral("version")).toString().split(u'.');
+        if (parts.size() >= 2 && parts[0].toInt() == 8)
+            newestMinor = qMax(newestMinor, parts[1].toInt());
+    }
+    for (auto releaseIt = root.constBegin(); releaseIt != root.constEnd(); ++releaseIt) {
+        const QJsonObject release = releaseIt.value().toObject();
+        const QString version = release.value(QStringLiteral("version")).toString();
+        const QStringList parts = version.split(u'.');
+        if (parts.size() < 3 || parts[0].toInt() != 8 || parts[1].toInt() < 1)
+            continue;
+
+        const QStringList buildTypes{QStringLiteral("nts"), QStringLiteral("ts")};
+        for (const QString &buildType : buildTypes) {
+            QJsonObject build;
+            QString buildName;
+            for (auto buildIt = release.constBegin(); buildIt != release.constEnd(); ++buildIt) {
+                const bool matchingType = buildType == QStringLiteral("nts")
+                    ? buildIt.key().startsWith(QStringLiteral("nts-"))
+                    : buildIt.key().startsWith(QStringLiteral("ts-"));
+                if (matchingType && buildIt.key().endsWith(QStringLiteral("-x64"))) {
+                    build = buildIt.value().toObject();
+                    buildName = buildIt.key();
+                    break;
+                }
+            }
+            const QJsonObject archive = build.value(QStringLiteral("zip")).toObject();
+            const QString fileName = archive.value(QStringLiteral("path")).toString();
+            const QString checksum = archive.value(QStringLiteral("sha256")).toString().toLower();
+            if (buildName.isEmpty() || fileName.isEmpty() || checksum.size() != 64)
+                continue;
+
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version + u'-' + buildType);
+            item.insert(QStringLiteral("channel"),
+                        parts[1].toInt() >= 4 ? QStringLiteral("stable")
+                                              : QStringLiteral("security"));
+            item.insert(QStringLiteral("buildType"), buildType);
+            item.insert(QStringLiteral("released"),
+                        build.value(QStringLiteral("mtime")).toString().left(10));
+            item.insert(QStringLiteral("size"), archive.value(QStringLiteral("size")).toString());
+            item.insert(QStringLiteral("recommended"),
+                        parts[1].toInt() == newestMinor
+                            && buildType == QStringLiteral("nts"));
+            item.insert(QStringLiteral("downloadUrl"),
+                        QString::fromLatin1(phpDistBase) + fileName);
+            item.insert(QStringLiteral("sha256"), checksum);
+            item.insert(QStringLiteral("build"), buildName);
+            versions.append(item);
+            knownVersions.insert(item.value(QStringLiteral("version")).toString());
+        }
+    }
+
+    const QString archiveHtml =
+        documentRoot.value(QStringLiteral("archiveHtml")).toString();
+    static const QRegularExpression archivePattern(
+        QStringLiteral(
+            R"(php-(\d+\.\d+\.\d+)(-nts)?-Win32-[A-Za-z0-9]+-x64\.zip)"),
+        QRegularExpression::CaseInsensitiveOption);
+    QRegularExpressionMatchIterator matches = archivePattern.globalMatch(archiveHtml);
+    while (matches.hasNext()) {
+        const QRegularExpressionMatch match = matches.next();
+        const QString baseVersion = match.captured(1);
+        const QStringList parts = baseVersion.split(u'.');
+        if (parts.size() < 3 || parts[0].toInt() < 5)
+            continue;
+        const QString buildType =
+            match.captured(2).isEmpty() ? QStringLiteral("ts") : QStringLiteral("nts");
+        const QString version = baseVersion + u'-' + buildType;
+        if (knownVersions.contains(version))
+            continue;
+        const QString fileName = match.captured(0);
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"), QStringLiteral("legacy"));
+        item.insert(QStringLiteral("buildType"), buildType);
+        item.insert(QStringLiteral("released"), QStringLiteral("—"));
+        item.insert(QStringLiteral("size"), QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"), false);
+        item.insert(QStringLiteral("downloadUrl"),
+                    QString::fromLatin1(phpArchiveUrl) + fileName);
+        item.insert(QStringLiteral("sha256"), QString());
+        item.insert(QStringLiteral("verification"), QStringLiteral("unverified"));
+        item.insert(QStringLiteral("unverified"), true);
+        versions.append(item);
+        knownVersions.insert(version);
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -481,10 +665,12 @@ QString ProviderController::downloadManifestPath(const QString &providerId, cons
     return downloadDirectory(providerId, version) + QStringLiteral("/download.json");
 }
 
-void ProviderController::download(const QString &providerId, const QString &version)
+void ProviderController::download(const QString &providerId, const QString &version,
+                                  bool allowUnverified)
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
-        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")) {
+        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
+        && providerId != QStringLiteral("php")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
@@ -515,6 +701,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
     QUrl url;
     QString fileName;
     m_expectedHash.clear();
+    m_verificationMode = QStringLiteral("sha256");
     if (providerId == QStringLiteral("node")) {
         fileName = nodeFileName(version);
         url = QUrl(QString::fromLatin1(nodeDistBase) + u'v' + version + u'/' + fileName);
@@ -532,11 +719,21 @@ void ProviderController::download(const QString &providerId, const QString &vers
         fileName = QFileInfo(url.path()).fileName();
         const bool validVerification = m_expectedHash.size() == 64
             || (providerId == QStringLiteral("python")
-                && verification == QStringLiteral("authenticode"));
+                && verification == QStringLiteral("authenticode"))
+            || (providerId == QStringLiteral("php")
+                && verification == QStringLiteral("unverified") && allowUnverified);
+        if (providerId == QStringLiteral("php")
+            && verification == QStringLiteral("unverified") && !allowUnverified) {
+            setError(tr("PHP %1 是无官方校验文件的历史归档；确认风险后才能安装").arg(version));
+            return;
+        }
+        if (!verification.isEmpty())
+            m_verificationMode = verification;
         if (!url.isValid() || fileName.isEmpty() || !validVerification) {
             setError(tr("找不到 %1 %2 的官方安装包信息")
                          .arg(providerId == QStringLiteral("java") ? QStringLiteral("Java")
                               : providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                              : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                                                                        : QStringLiteral("Flutter"),
                               version));
             return;
@@ -559,7 +756,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
                   .arg(providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                        : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                        : providerId == QStringLiteral("java") ? QStringLiteral("Java")
-                                                              : QStringLiteral("Python"),
+                       : providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                                                                : QStringLiteral("PHP"),
                        version));
     setBusy(true);
 
@@ -605,6 +803,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
             reply->deleteLater();
             if (m_providerId == QStringLiteral("node"))
                 fetchNodeChecksum();
+            else if (m_verificationMode == QStringLiteral("unverified"))
+                recordUnverifiedDownload();
             else
                 verifyDownloadedFile(m_expectedHash);
             return;
@@ -620,6 +820,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
             fetchNodeChecksum();
         else if (m_providerId == QStringLiteral("python") && m_expectedHash.isEmpty())
             verifyPythonDownload();
+        else if (m_verificationMode == QStringLiteral("unverified"))
+            recordUnverifiedDownload();
         else
             verifyDownloadedFile(m_expectedHash);
     });
@@ -674,6 +876,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
     }
     if (providerId == QStringLiteral("python")) {
         installAndActivatePython(version);
+        return;
+    }
+    if (providerId == QStringLiteral("php")) {
+        installAndActivatePhp(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -844,6 +1050,12 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
     manifestObject.insert(QStringLiteral("version"), m_version);
     manifestObject.insert(QStringLiteral("file"), QFileInfo(m_downloadPath).fileName());
     manifestObject.insert(QStringLiteral("sha256"), QString::fromLatin1(expectedHash));
+    manifestObject.insert(QStringLiteral("verification"),
+                          m_verificationMode == QStringLiteral("unverified")
+                              ? QStringLiteral("local-integrity-only")
+                          : m_verificationMode == QStringLiteral("authenticode")
+                              ? QStringLiteral("authenticode")
+                              : QStringLiteral("official-sha256"));
     QSaveFile manifest(downloadManifestPath(m_providerId, m_version));
     if (manifest.open(QIODevice::WriteOnly)) {
         manifest.write(QJsonDocument(manifestObject).toJson(QJsonDocument::Indented));
@@ -855,10 +1067,27 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
                   .arg(m_providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                        : m_providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                        : m_providerId == QStringLiteral("java") ? QStringLiteral("Java")
-                                                                : QStringLiteral("Python"),
+                       : m_providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                                                                  : QStringLiteral("PHP"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
+}
+
+void ProviderController::recordUnverifiedDownload()
+{
+    QFile file(m_downloadFile.fileName());
+    if (!file.open(QIODevice::ReadOnly)) {
+        fail(tr("无法读取 PHP 历史归档以记录本地完整性"));
+        return;
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) {
+        fail(tr("无法计算 PHP 历史归档的本地 SHA-256"));
+        return;
+    }
+    setStatus(tr("PHP 历史归档没有官方校验文件；正在记录本地完整性基线…"));
+    verifyDownloadedFile(hash.result().toHex());
 }
 
 void ProviderController::verifyPythonDownload()
@@ -1406,6 +1635,132 @@ bool ProviderController::activatePython(const QString &version)
     return true;
 }
 
+void ProviderController::installAndActivatePhp(const QString &version)
+{
+    const QString phpExe = installDirectory(QStringLiteral("php"), version)
+        + QStringLiteral("/php.exe");
+    if (QFileInfo(phpExe).isFile()) {
+        if (m_makeDefaultAfterInstall && !activatePhp(version))
+            setError(tr("无法激活 PHP %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+
+    QFile manifest(downloadManifestPath(QStringLiteral("php"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("PHP %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive = downloadDirectory(QStringLiteral("php"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("PHP %1 下载文件不存在").arg(version));
+        return;
+    }
+
+    const QString installsRoot =
+        QFileInfo(installDirectory(QStringLiteral("php"), version)).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if (staging.exists() && !staging.removeRecursively()) {
+        setError(tr("无法清理上次未完成的 PHP 解压目录"));
+        return;
+    }
+    if (!QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 PHP 安装目录"));
+        return;
+    }
+
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("php");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 PHP %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            const QString details =
+                QString::fromLocal8Bit(m_installProcess.readAllStandardError()).trimmed();
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("解压 PHP 失败：%1").arg(details));
+            return;
+        }
+        if (!QFileInfo(m_pendingStagingPath + QStringLiteral("/php.exe")).isFile()) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("PHP 压缩包目录结构无效"));
+            return;
+        }
+        const QString developmentIni =
+            m_pendingStagingPath + QStringLiteral("/php.ini-development");
+        const QString activeIni = m_pendingStagingPath + QStringLiteral("/php.ini");
+        if (!QFileInfo(developmentIni).isFile()
+            || (!QFileInfo(activeIni).exists() && !QFile::copy(developmentIni, activeIni))) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法生成 PHP 的受管理 php.ini"));
+            return;
+        }
+
+        const QString destination =
+            installDirectory(QStringLiteral("php"), m_pendingInstallVersion);
+        if (QFileInfo(destination).exists()
+            || !QDir().rename(m_pendingStagingPath, destination)) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法完成 PHP 安装目录切换"));
+            return;
+        }
+        if (m_makeDefaultAfterInstall && !activatePhp(m_pendingInstallVersion)) {
+            fail(tr("PHP 已解压，但写入系统 PATH 失败"));
+            return;
+        }
+        setStatus(tr("PHP %1 安装完成").arg(m_pendingInstallVersion));
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"),
+                            m_pendingStagingPath});
+}
+
+bool ProviderController::activatePhp(const QString &version)
+{
+    const QString root = installDirectory(QStringLiteral("php"), version);
+    if (!writeCommandShim(QStringLiteral("php"), root + QStringLiteral("/php.exe"))
+        || !ensureShimPath()) {
+        return false;
+    }
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("php"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("PHP %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
 bool ProviderController::deactivateProvider(const QString &providerId)
 {
     QStringList shimNames;
@@ -1418,6 +1773,8 @@ bool ProviderController::deactivateProvider(const QString &providerId)
                      QStringLiteral("javadoc"), QStringLiteral("jshell")};
     else if (providerId == QStringLiteral("python"))
         shimNames = {QStringLiteral("python"), QStringLiteral("pip")};
+    else if (providerId == QStringLiteral("php"))
+        shimNames = {QStringLiteral("php")};
     else
         return false;
 

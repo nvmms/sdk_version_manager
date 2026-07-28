@@ -5,7 +5,7 @@
 SDK Version Manager (SVM) is a local-first, cross-platform development environment manager built with Qt 6. It provides both a desktop GUI and the `svm` CLI for managing the SDK versions used by a project.
 
 > [!IMPORTANT]
-> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, Java (Eclipse Temurin JDK), and Python**. Web services, databases, and other capabilities remain on the roadmap.
+> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, Java (Eclipse Temurin JDK), Python, and PHP**. Web services, databases, and other capabilities remain on the roadmap.
 
 ## Download and install
 
@@ -151,11 +151,20 @@ running IDE might require a window reload or restart after changing the setting.
 3. The global default;
 4. The latest installed version.
 
-The currently supported CLI provider IDs are `node`, `flutter`, `java`, and `python`. The Java
+The currently supported CLI provider IDs are `node`, `flutter`, `java`, `python`, and `php`. The Java
 provider reads Windows x64 Temurin JDK ZIP releases from the official Eclipse Adoptium
 API and verifies the official SHA-256 before installation.
 The Python provider reads Windows x64 installers from the official python.org API and
 also requires a valid SHA-256 before installing into SVM's managed directory.
+The PHP provider reads TS and NTS x64 ZIP releases from the official PHP for Windows
+index and verifies the official SHA-256. The build type is part of the version identity,
+for example `8.4.15-nts`; filter it in the GUI or with `svm list nts php`.
+
+Historical PHP for Windows archives appear under the `Legacy` filter. PHP does not
+publish checksums or signatures for these archived ZIP files, so the GUI requires
+confirmation before installation. The CLI prompts in an interactive terminal and
+requires `--allow-unverified-archive` otherwise. The SHA-256 recorded after download is
+only a local integrity baseline, not an official verification.
 
 ## Available today
 
@@ -165,7 +174,7 @@ also requires a valid SHA-256 before installing into SVM's managed directory.
 - Set global default SDK versions;
 - Bind multiple SDK versions to a project through `.svmrc`;
 - Find the nearest `.svmrc` by walking up from the current directory;
-- Run the selected SDK through `svm node ...`, `svm flutter ...`, `svm java ...`, or `svm python ...`;
+- Run the selected SDK through `svm node ...`, `svm flutter ...`, `svm java ...`, `svm python ...`, or `svm php ...`;
 - Print project SDK setup guidance for common IDEs from `svm use` without writing
   IDE-specific files;
 - Explicitly merge Flutter, Python, and Java settings with `svm ide vscode`;
