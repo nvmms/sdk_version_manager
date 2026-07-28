@@ -98,6 +98,8 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/python.exe");
     if (provider == QStringLiteral("php"))
         return root + QStringLiteral("/php.exe");
+    if (provider == QStringLiteral("go"))
+        return root + QStringLiteral("/bin/go.exe");
     return {};
 }
 
@@ -326,7 +328,8 @@ bool downloadAndInstall(const QString &provider, const QString &version,
     heartbeat.start();
 
     if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python") || provider == QStringLiteral("php")) {
+        || provider == QStringLiteral("python") || provider == QStringLiteral("php")
+        || provider == QStringLiteral("go")) {
         out << "Reading the " << provider << " version index..." << Qt::endl;
         controller.loadVersions(provider, false);
         waitUntilIdle(controller);
@@ -375,7 +378,8 @@ bool downloadAndInstall(const QString &provider, const QString &version,
         : provider == QStringLiteral("flutter") ? QStringLiteral("Flutter")
         : provider == QStringLiteral("java") ? QStringLiteral("Java")
         : provider == QStringLiteral("python") ? QStringLiteral("Python")
-                                               : QStringLiteral("PHP");
+        : provider == QStringLiteral("php") ? QStringLiteral("PHP")
+                                             : QStringLiteral("Go");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -1090,6 +1094,44 @@ QVariantList cachedVersions(const QString &provider)
             result.append(item);
             knownVersions.insert(version);
         }
+    } else if (provider == QStringLiteral("go") && document.isArray()) {
+        static const QRegularExpression versionPattern(
+            QStringLiteral(R"(^go(\d+)\.(\d+)(?:\.(\d+))?(.*)$)"));
+        for (const QJsonValue &value : document.array()) {
+            const QJsonObject release = value.toObject();
+            const QRegularExpressionMatch match =
+                versionPattern.match(release.value(QStringLiteral("version")).toString());
+            if (!match.hasMatch())
+                continue;
+            bool hasWindowsArchive = false;
+            for (const QJsonValue &fileValue : release.value(QStringLiteral("files")).toArray()) {
+                const QJsonObject fileObject = fileValue.toObject();
+                if (fileObject.value(QStringLiteral("os")).toString() == QStringLiteral("windows")
+                    && fileObject.value(QStringLiteral("arch")).toString()
+                           == QStringLiteral("amd64")
+                    && fileObject.value(QStringLiteral("kind")).toString()
+                           == QStringLiteral("archive")
+                    && fileObject.value(QStringLiteral("sha256")).toString().size() == 64) {
+                    hasWindowsArchive = true;
+                    break;
+                }
+            }
+            if (!hasWindowsArchive)
+                continue;
+            QString version = QStringLiteral("%1.%2.%3")
+                                  .arg(match.captured(1), match.captured(2),
+                                       match.captured(3).isEmpty()
+                                           ? QStringLiteral("0") : match.captured(3));
+            if (!match.captured(4).isEmpty())
+                version += u'-' + match.captured(4);
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version);
+            item.insert(QStringLiteral("channel"),
+                        release.value(QStringLiteral("stable")).toBool()
+                            ? QStringLiteral("stable") : QStringLiteral("beta"));
+            item.insert(QStringLiteral("date"), QStringLiteral("—"));
+            result.append(item);
+        }
     }
     return result;
 }
@@ -1111,7 +1153,7 @@ int commandList(const QStringList &arguments)
 {
     static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
                                        QStringLiteral("java"), QStringLiteral("python"),
-                                       QStringLiteral("php")};
+                                       QStringLiteral("php"), QStringLiteral("go")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1245,9 +1287,14 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
         environment.insert(QStringLiteral("PHPRC"), installedVersionDirectory(provider, version));
         process.setProcessEnvironment(environment);
     }
+    if (provider == QStringLiteral("go")) {
+        environment.insert(QStringLiteral("GOROOT"), installedVersionDirectory(provider, version));
+        process.setProcessEnvironment(environment);
+    }
 
     if (provider == QStringLiteral("node") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python") || provider == QStringLiteral("php")) {
+        || provider == QStringLiteral("python") || provider == QStringLiteral("php")
+        || provider == QStringLiteral("go")) {
         process.start(executable, arguments);
     } else {
         for (const QString &argument : arguments) {
@@ -1295,6 +1342,7 @@ void printHelp()
            "  svm java --version\n"
            "  svm python --version\n"
            "  svm php --version\n"
+           "  svm go version\n"
            "  svm use php 5.6.40-nts --allow-unverified-archive\n"
            "  svm flutter doctor\n";
 }
@@ -1324,7 +1372,7 @@ int main(int argc, char *argv[])
         return commandList(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
         || command == QStringLiteral("java") || command == QStringLiteral("python")
-        || command == QStringLiteral("php"))
+        || command == QStringLiteral("php") || command == QStringLiteral("go"))
         return proxyCommand(command, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;

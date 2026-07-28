@@ -5,7 +5,7 @@
 SDK Version Manager (SVM) is a local-first, cross-platform development environment manager built with Qt 6. It provides both a desktop GUI and the `svm` CLI for managing the SDK versions used by a project.
 
 > [!IMPORTANT]
-> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, Java (Eclipse Temurin JDK), Python, and PHP**. Web services, databases, and other capabilities remain on the roadmap.
+> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, Java (Eclipse Temurin JDK), Python, PHP, and Go**. Web services, databases, and other capabilities remain on the roadmap.
 
 ## Download and install
 
@@ -151,7 +151,7 @@ running IDE might require a window reload or restart after changing the setting.
 3. The global default;
 4. The latest installed version.
 
-The currently supported CLI provider IDs are `node`, `flutter`, `java`, `python`, and `php`. The Java
+The currently supported CLI provider IDs are `node`, `flutter`, `java`, `python`, `php`, and `go`. The Java
 provider reads Windows x64 Temurin JDK ZIP releases from the official Eclipse Adoptium
 API and verifies the official SHA-256 before installation.
 The Python provider reads Windows x64 installers from the official python.org API and
@@ -166,6 +166,10 @@ confirmation before installation. The CLI prompts in an interactive terminal and
 requires `--allow-unverified-archive` otherwise. The SHA-256 recorded after download is
 only a local integrity baseline, not an official verification.
 
+The Go provider uses the complete official go.dev release index and Windows amd64 ZIP
+archives, verifies the official SHA-256, and resolves the matching `GOROOT` for
+`svm go ...`.
+
 ## Available today
 
 - Browse, refresh, and filter Node.js and Flutter releases in the GUI;
@@ -174,7 +178,7 @@ only a local integrity baseline, not an official verification.
 - Set global default SDK versions;
 - Bind multiple SDK versions to a project through `.svmrc`;
 - Find the nearest `.svmrc` by walking up from the current directory;
-- Run the selected SDK through `svm node ...`, `svm flutter ...`, `svm java ...`, `svm python ...`, or `svm php ...`;
+- Run the selected SDK through `svm node ...`, `svm flutter ...`, `svm java ...`, `svm python ...`, `svm php ...`, or `svm go ...`;
 - Print project SDK setup guidance for common IDEs from `svm use` without writing
   IDE-specific files;
 - Explicitly merge Flutter, Python, and Java settings with `svm ide vscode`;

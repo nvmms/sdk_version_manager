@@ -5,7 +5,7 @@
 SDK Version Manager（SVM）是一个基于 Qt 6 的本地优先、跨平台开发环境管理工具。它通过桌面 GUI 和 `svm` 命令行统一管理项目使用的 SDK 版本。
 
 > [!IMPORTANT]
-> 项目目前处于早期开发阶段（`0.1`），优先支持 Windows。当前可用 Provider 为 **Node.js、Flutter、Java（Eclipse Temurin JDK）、Python 和 PHP**；Web 服务、数据库等能力仍在规划中。
+> 项目目前处于早期开发阶段（`0.1`），优先支持 Windows。当前可用 Provider 为 **Node.js、Flutter、Java（Eclipse Temurin JDK）、Python、PHP 和 Go**；Web 服务、数据库等能力仍在规划中。
 
 ## 下载与安装
 
@@ -145,7 +145,7 @@ IntelliJ IDEA 与 Android Studio 当前没有供 SVM 可靠修改的稳定项目
 3. 全局默认版本；
 4. 最新的已安装版本。
 
-当前 CLI 支持的 Provider ID 为 `node`、`flutter`、`java`、`python` 和 `php`。Java Provider 从
+当前 CLI 支持的 Provider ID 为 `node`、`flutter`、`java`、`python`、`php` 和 `go`。Java Provider 从
 Eclipse Adoptium 官方 API 获取 Windows x64 Temurin JDK ZIP，安装前校验官方 SHA-256。
 Python Provider 从 python.org 官方 API 获取 Windows x64 安装程序，同样要求 SHA-256
 校验通过后才安装到 SVM 管理目录。
@@ -158,6 +158,9 @@ SHA-256 或签名，GUI 安装前必须确认风险；CLI 交互环境会询问�
 传入 `--allow-unverified-archive`。SVM 下载后记录的 SHA-256 仅用于检测本地文件
 后续是否损坏，不代表官方校验。
 
+Go Provider 使用 go.dev 官方完整发行索引和 Windows amd64 ZIP，安装前校验官方
+SHA-256，并通过 `svm go ...` 为项目解析对应的 `GOROOT`。
+
 ## 当前功能
 
 - 在 GUI 中浏览、刷新和筛选 Node.js / Flutter 版本；
@@ -166,7 +169,7 @@ SHA-256 或签名，GUI 安装前必须确认风险；CLI 交互环境会询问�
 - 设置全局默认 SDK 版本；
 - 使用 `.svmrc` 为项目绑定多个 SDK 版本；
 - 从当前目录向父目录查找最近的 `.svmrc`；
-- 通过 `svm node ...`、`svm flutter ...`、`svm java ...`、`svm python ...` 和 `svm php ...` 代理执行项目选定的 SDK；
+- 通过 `svm node ...`、`svm flutter ...`、`svm java ...`、`svm python ...`、`svm php ...` 和 `svm go ...` 代理执行项目选定的 SDK；
 - `svm use` 输出常用 IDE 的项目 SDK 配置提示，但不自动写入 IDE 文件；
 - 通过 `svm ide vscode` 显式合并 VS Code 的 Flutter、Python 和 Java 配置；
 - GUI 与 CLI 通过本机 EventBus 同步任务状态；

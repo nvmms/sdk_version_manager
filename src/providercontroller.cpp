@@ -37,6 +37,8 @@ constexpr auto pythonIndexUrl = "https://www.python.org/api/v2/downloads/release
 constexpr auto phpIndexUrl = "https://windows.php.net/downloads/releases/releases.json";
 constexpr auto phpDistBase = "https://windows.php.net/downloads/releases/";
 constexpr auto phpArchiveUrl = "https://windows.php.net/downloads/releases/archives/";
+constexpr auto goIndexUrl = "https://go.dev/dl/?mode=json&include=all";
+constexpr auto goDistBase = "https://go.dev/dl/";
 }
 
 ProviderController::ProviderController(QObject *parent)
@@ -129,7 +131,7 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
-        && providerId != QStringLiteral("php")) {
+        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -161,14 +163,16 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                 : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
                 : providerId == QStringLiteral("java") ? applyJavaIndex(data)
                 : providerId == QStringLiteral("python") ? applyPythonIndex(data)
-                                                         : applyPhpIndex(data);
+                : providerId == QStringLiteral("php") ? applyPhpIndex(data)
+                                                      : applyGoIndex(data);
             if (applied && phpCacheHasArchives) {
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                     : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                     : providerId == QStringLiteral("java") ? QStringLiteral("Java")
                     : providerId == QStringLiteral("python") ? QStringLiteral("Python")
-                                                             : QStringLiteral("PHP")));
+                    : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                                                          : QStringLiteral("Go")));
                 return;
             }
         }
@@ -180,7 +184,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
         : providerId == QStringLiteral("java") ? QStringLiteral("Java")
         : providerId == QStringLiteral("python") ? QStringLiteral("Python")
-                                                 : QStringLiteral("PHP");
+        : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                                              : QStringLiteral("Go");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
@@ -199,7 +204,9 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                             ? QString::fromLatin1(flutterIndexUrl)
                         : providerId == QStringLiteral("python")
                             ? QString::fromLatin1(pythonIndexUrl)
-                            : QString::fromLatin1(phpIndexUrl));
+                        : providerId == QStringLiteral("php")
+                            ? QString::fromLatin1(phpIndexUrl)
+                            : QString::fromLatin1(goIndexUrl));
     m_reply = m_network.get(QNetworkRequest(indexUrl));
     connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
         QNetworkReply *reply = m_reply;
@@ -218,7 +225,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
             : providerId == QStringLiteral("java") ? applyJavaIndex(data)
             : providerId == QStringLiteral("python") ? applyPythonIndex(data)
-                                                     : applyPhpIndex(data);
+            : providerId == QStringLiteral("php") ? applyPhpIndex(data)
+                                                  : applyGoIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -648,6 +656,73 @@ bool ProviderController::applyPhpIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyGoIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray())
+        return false;
+
+    static const QRegularExpression versionPattern(
+        QStringLiteral(R"(^go(\d+)\.(\d+)(?:\.(\d+))?(.*)$)"));
+    QVariantList versions;
+    bool recommendedAssigned = false;
+    for (const QJsonValue &value : document.array()) {
+        const QJsonObject release = value.toObject();
+        const QRegularExpressionMatch versionMatch =
+            versionPattern.match(release.value(QStringLiteral("version")).toString());
+        if (!versionMatch.hasMatch())
+            continue;
+
+        QJsonObject archive;
+        for (const QJsonValue &fileValue : release.value(QStringLiteral("files")).toArray()) {
+            const QJsonObject file = fileValue.toObject();
+            if (file.value(QStringLiteral("os")).toString() == QStringLiteral("windows")
+                && file.value(QStringLiteral("arch")).toString() == QStringLiteral("amd64")
+                && file.value(QStringLiteral("kind")).toString() == QStringLiteral("archive")
+                && file.value(QStringLiteral("filename")).toString().endsWith(
+                    QStringLiteral(".zip"))) {
+                archive = file;
+                break;
+            }
+        }
+        const QString fileName = archive.value(QStringLiteral("filename")).toString();
+        const QString checksum = archive.value(QStringLiteral("sha256")).toString().toLower();
+        if (fileName.isEmpty() || checksum.size() != 64)
+            continue;
+
+        const QString suffix = versionMatch.captured(4);
+        QString version = QStringLiteral("%1.%2.%3")
+                              .arg(versionMatch.captured(1), versionMatch.captured(2),
+                                   versionMatch.captured(3).isEmpty()
+                                       ? QStringLiteral("0") : versionMatch.captured(3));
+        if (!suffix.isEmpty())
+            version += u'-' + suffix;
+        const bool stable = release.value(QStringLiteral("stable")).toBool();
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"),
+                    stable ? QStringLiteral("stable") : QStringLiteral("beta"));
+        item.insert(QStringLiteral("released"), QStringLiteral("—"));
+        const qint64 size = archive.value(QStringLiteral("size")).toInteger();
+        item.insert(QStringLiteral("size"),
+                    size > 0 ? QStringLiteral("%1 MB").arg(size / 1024 / 1024)
+                             : QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"), stable && !recommendedAssigned);
+        item.insert(QStringLiteral("downloadUrl"),
+                    QString::fromLatin1(goDistBase) + fileName);
+        item.insert(QStringLiteral("sha256"), checksum);
+        versions.append(item);
+        if (stable)
+            recommendedAssigned = true;
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -670,7 +745,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
-        && providerId != QStringLiteral("php")) {
+        && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
@@ -734,6 +809,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
                          .arg(providerId == QStringLiteral("java") ? QStringLiteral("Java")
                               : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                               : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                              : providerId == QStringLiteral("go") ? QStringLiteral("Go")
                                                                        : QStringLiteral("Flutter"),
                               version));
             return;
@@ -757,7 +833,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
                        : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                        : providerId == QStringLiteral("java") ? QStringLiteral("Java")
                        : providerId == QStringLiteral("python") ? QStringLiteral("Python")
-                                                                : QStringLiteral("PHP"),
+                       : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                                                             : QStringLiteral("Go"),
                        version));
     setBusy(true);
 
@@ -880,6 +957,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
     }
     if (providerId == QStringLiteral("php")) {
         installAndActivatePhp(version);
+        return;
+    }
+    if (providerId == QStringLiteral("go")) {
+        installAndActivateGo(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -1068,7 +1149,8 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
                        : m_providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
                        : m_providerId == QStringLiteral("java") ? QStringLiteral("Java")
                        : m_providerId == QStringLiteral("python") ? QStringLiteral("Python")
-                                                                  : QStringLiteral("PHP"),
+                       : m_providerId == QStringLiteral("php") ? QStringLiteral("PHP")
+                                                               : QStringLiteral("Go"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
@@ -1761,6 +1843,124 @@ bool ProviderController::activatePhp(const QString &version)
     return true;
 }
 
+void ProviderController::installAndActivateGo(const QString &version)
+{
+    const QString goExe =
+        installDirectory(QStringLiteral("go"), version) + QStringLiteral("/bin/go.exe");
+    if (QFileInfo(goExe).isFile()) {
+        if (m_makeDefaultAfterInstall && !activateGo(version))
+            setError(tr("无法激活 Go %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+
+    QFile manifest(downloadManifestPath(QStringLiteral("go"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("Go %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive = downloadDirectory(QStringLiteral("go"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("Go %1 下载文件不存在").arg(version));
+        return;
+    }
+
+    const QString installsRoot =
+        QFileInfo(installDirectory(QStringLiteral("go"), version)).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if (staging.exists() && !staging.removeRecursively()) {
+        setError(tr("无法清理上次未完成的 Go 解压目录"));
+        return;
+    }
+    if (!QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 Go 安装目录"));
+        return;
+    }
+
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("go");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 Go %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            const QString details =
+                QString::fromLocal8Bit(m_installProcess.readAllStandardError()).trimmed();
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("解压 Go 失败：%1").arg(details));
+            return;
+        }
+        const QString extracted = m_pendingStagingPath + QStringLiteral("/go");
+        if (!QFileInfo(extracted + QStringLiteral("/bin/go.exe")).isFile()) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("Go 压缩包目录结构无效"));
+            return;
+        }
+        const QString destination =
+            installDirectory(QStringLiteral("go"), m_pendingInstallVersion);
+        if (QFileInfo(destination).exists() || !QDir().rename(extracted, destination)) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法完成 Go 安装目录切换"));
+            return;
+        }
+        QDir(m_pendingStagingPath).removeRecursively();
+        if (m_makeDefaultAfterInstall && !activateGo(m_pendingInstallVersion)) {
+            fail(tr("Go 已解压，但写入系统 PATH 失败"));
+            return;
+        }
+        setStatus(tr("Go %1 安装完成").arg(m_pendingInstallVersion));
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"),
+                            m_pendingStagingPath});
+}
+
+bool ProviderController::activateGo(const QString &version)
+{
+    const QString bin =
+        installDirectory(QStringLiteral("go"), version) + QStringLiteral("/bin");
+    if (!writeCommandShim(QStringLiteral("go"), bin + QStringLiteral("/go.exe"))
+        || !writeCommandShim(QStringLiteral("gofmt"), bin + QStringLiteral("/gofmt.exe"))
+        || !ensureShimPath()) {
+        return false;
+    }
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("go"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("Go %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
 bool ProviderController::deactivateProvider(const QString &providerId)
 {
     QStringList shimNames;
@@ -1775,6 +1975,8 @@ bool ProviderController::deactivateProvider(const QString &providerId)
         shimNames = {QStringLiteral("python"), QStringLiteral("pip")};
     else if (providerId == QStringLiteral("php"))
         shimNames = {QStringLiteral("php")};
+    else if (providerId == QStringLiteral("go"))
+        shimNames = {QStringLiteral("go"), QStringLiteral("gofmt")};
     else
         return false;
 

@@ -73,6 +73,7 @@ private:
     bool applyJavaIndex(const QByteArray &data);
     bool applyPythonIndex(const QByteArray &data);
     bool applyPhpIndex(const QByteArray &data);
+    bool applyGoIndex(const QByteArray &data);
     void fetchJavaIndexes();
     void fetchPhpIndexes();
     QString cachePath(const QString &providerId) const;
@@ -93,6 +94,8 @@ private:
     bool activatePython(const QString &version);
     void installAndActivatePhp(const QString &version);
     bool activatePhp(const QString &version);
+    void installAndActivateGo(const QString &version);
+    bool activateGo(const QString &version);
     bool deactivateProvider(const QString &providerId);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);
