@@ -164,6 +164,10 @@ Python Provider 从 python.org 官方 API 获取 Windows x64 安装程序，同�
 - GUI 与 CLI 通过本机 EventBus 同步任务状态；
 - 构建 Windows x64 / ARM64 安装程序。
 
+下载中心默认只展示已支持 Provider 和下一阶段明确计划接入的 Provider。Dart、Kotlin、
+Scala、Groovy 等通常由上层 SDK 或项目构建系统提供的工具，以及其他低优先级服务，
+暂时保留在路线图数据中但不在默认目录展示。
+
 ## 项目配置
 
 `svm init` 会在当前目录中：

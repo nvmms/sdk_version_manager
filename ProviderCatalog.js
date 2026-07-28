@@ -30,6 +30,15 @@ var sections = [
     }
 ]
 
+// 下载中心默认只展示已实现 Provider 和下一阶段明确要打通的 Provider。
+// 其他条目继续保留在路线图数据中，等高级工具目录或依赖关系模型成熟后再开放。
+var defaultVisibleProviderKeys = [
+    "flutter", "java", "python", "node",
+    "php", "go", "ruby", "dotnet",
+    "nginx", "apache-httpd",
+    "mysql", "postgresql", "mongodb", "redis"
+]
+
 var providers = [
     provider("flutter", "sdk", "Flutter", "跨平台应用开发", "F", "#55c2ff", true, [
         version("3.32.5", "stable", "1.1 GB", true),
@@ -147,6 +156,8 @@ function section(key) {
 function providersFor(sectionKey) {
     var result = []
     for (var i = 0; i < providers.length; ++i) {
+        if (defaultVisibleProviderKeys.indexOf(providers[i].key) < 0)
+            continue
         if (sectionKey === "download" || providers[i].section === sectionKey)
             result.push(providers[i])
     }

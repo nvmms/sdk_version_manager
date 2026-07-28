@@ -172,6 +172,11 @@ also requires a valid SHA-256 before installing into SVM's managed directory.
 - Synchronize GUI and CLI task state through a local EventBus;
 - Build Windows x64 and ARM64 installers.
 
+The download catalog shows only supported providers and the providers explicitly planned
+for the next implementation stage. Tools normally supplied by a parent SDK or project
+build system, such as Dart, Kotlin, Scala, and Groovy, and other lower-priority services
+remain in roadmap data but are hidden from the default catalog.
+
 ## Project configuration
 
 `svm init` performs the following actions in the current directory:
