@@ -38,7 +38,8 @@ ApplicationWindow {
     }
 
     function hasVersionProvider(providerKey) {
-        return providerKey === "flutter" || providerKey === "node" || providerKey === "java"
+        return providerKey === "flutter" || providerKey === "node"
+                || providerKey === "java" || providerKey === "python"
     }
 
     function filterProviders(source, query) {
@@ -888,6 +889,7 @@ ApplicationWindow {
                                 FilterButton {
                                     text: "Stable"
                                     visible: window.selectedItem().key === "flutter"
+                                             || window.selectedItem().key === "python"
                                     current: window.versionFilter === "stable"
                                     onClicked: window.versionFilter = "stable"
                                 }

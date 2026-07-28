@@ -93,6 +93,8 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/bin/flutter.bat");
     if (provider == QStringLiteral("java"))
         return root + QStringLiteral("/bin/java.exe");
+    if (provider == QStringLiteral("python"))
+        return root + QStringLiteral("/python.exe");
     return {};
 }
 
@@ -309,7 +311,8 @@ bool downloadAndInstall(const QString &provider, const QString &version)
     });
     heartbeat.start();
 
-    if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")) {
+    if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")
+        || provider == QStringLiteral("python")) {
         out << "Reading the " << provider << " version index..." << Qt::endl;
         controller.loadVersions(provider, false);
         waitUntilIdle(controller);
@@ -323,7 +326,8 @@ bool downloadAndInstall(const QString &provider, const QString &version)
     const QString displayName = provider == QStringLiteral("node")
         ? QStringLiteral("Node.js")
         : provider == QStringLiteral("flutter") ? QStringLiteral("Flutter")
-                                                 : QStringLiteral("Java");
+        : provider == QStringLiteral("java") ? QStringLiteral("Java")
+                                             : QStringLiteral("Python");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -945,6 +949,29 @@ QVariantList cachedVersions(const QString &provider)
                         release.value(QStringLiteral("release_date")).toString().left(10));
             result.append(item);
         }
+    } else if (provider == QStringLiteral("python") && document.isArray()) {
+        static const QRegularExpression pattern(
+            QStringLiteral(R"(/python/(\d+\.\d+\.\d+)/python-\1-amd64\.exe$)"));
+        for (const QJsonValue &value : document.array()) {
+            const QJsonObject fileObject = value.toObject();
+            if (fileObject.value(QStringLiteral("name")).toString()
+                != QStringLiteral("Windows installer (64-bit)")) {
+                continue;
+            }
+            const QRegularExpressionMatch match =
+                pattern.match(fileObject.value(QStringLiteral("url")).toString());
+            if (!match.hasMatch()) {
+                continue;
+            }
+            const QStringList versionParts = match.captured(1).split(u'.');
+            if (versionParts.value(0).toInt() != 3 || versionParts.value(1).toInt() < 10)
+                continue;
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), match.captured(1));
+            item.insert(QStringLiteral("channel"), QStringLiteral("stable"));
+            item.insert(QStringLiteral("date"), QStringLiteral("—"));
+            result.append(item);
+        }
     }
     return result;
 }
@@ -965,7 +992,7 @@ bool downloadedLocally(const QString &provider, const QString &version)
 int commandList(const QStringList &arguments)
 {
     static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
-                                       QStringLiteral("java")};
+                                       QStringLiteral("java"), QStringLiteral("python")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1074,11 +1101,12 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
     process.setProcessChannelMode(QProcess::ForwardedChannels);
     process.setWorkingDirectory(QDir::currentPath());
     QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
-    const QString sdkBin = provider == QStringLiteral("node")
-        ? QFileInfo(executable).absolutePath()
-        : QFileInfo(executable).absolutePath();
+    const QString sdkBin = QFileInfo(executable).absolutePath();
+    QStringList sdkPaths{QDir::toNativeSeparators(sdkBin)};
+    if (provider == QStringLiteral("python"))
+        sdkPaths.append(QDir::toNativeSeparators(sdkBin + QStringLiteral("/Scripts")));
     environment.insert(QStringLiteral("PATH"),
-                       QDir::toNativeSeparators(sdkBin) + u';'
+                       sdkPaths.join(u';') + u';'
                            + environment.value(QStringLiteral("PATH")));
     process.setProcessEnvironment(environment);
     if (provider == QStringLiteral("java")) {
@@ -1087,7 +1115,8 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
         process.setProcessEnvironment(environment);
     }
 
-    if (provider == QStringLiteral("node") || provider == QStringLiteral("java")) {
+    if (provider == QStringLiteral("node") || provider == QStringLiteral("java")
+        || provider == QStringLiteral("python")) {
         process.start(executable, arguments);
     } else {
         for (const QString &argument : arguments) {
@@ -1132,6 +1161,7 @@ void printHelp()
            "  svm list lts node\n"
            "  svm node --version\n"
            "  svm java --version\n"
+           "  svm python --version\n"
            "  svm flutter doctor\n";
 }
 }
@@ -1159,7 +1189,7 @@ int main(int argc, char *argv[])
     if (command == QStringLiteral("list"))
         return commandList(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
-        || command == QStringLiteral("java"))
+        || command == QStringLiteral("java") || command == QStringLiteral("python"))
         return proxyCommand(command, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;

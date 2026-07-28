@@ -58,6 +58,11 @@ target_link_libraries(svm
     PRIVATE Qt6::Core Qt6::Network Qt6::Concurrent
 )
 
+if (WIN32)
+    target_link_libraries(appsdk_version_manager PRIVATE wintrust)
+    target_link_libraries(svm PRIVATE wintrust)
+endif()
+
 install(TARGETS appsdk_version_manager svm
     BUNDLE DESTINATION .
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

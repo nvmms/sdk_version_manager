@@ -65,9 +65,11 @@ private:
     void fetchNodeChecksum();
     void verifyNodeDownload(const QByteArray &checksumDocument);
     void verifyDownloadedFile(const QByteArray &expectedHash);
+    void verifyPythonDownload();
     bool applyNodeIndex(const QByteArray &data);
     bool applyFlutterIndex(const QByteArray &data);
     bool applyJavaIndex(const QByteArray &data);
+    bool applyPythonIndex(const QByteArray &data);
     void fetchJavaIndexes();
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;
@@ -83,6 +85,8 @@ private:
     bool activateFlutter(const QString &version);
     void installAndActivateJava(const QString &version);
     bool activateJava(const QString &version);
+    void installAndActivatePython(const QString &version);
+    bool activatePython(const QString &version);
     bool deactivateProvider(const QString &providerId);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);

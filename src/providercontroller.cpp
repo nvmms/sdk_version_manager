@@ -22,6 +22,8 @@
 
 #ifdef Q_OS_WIN
 #include <windows.h>
+#include <softpub.h>
+#include <wintrust.h>
 #endif
 
 namespace {
@@ -30,6 +32,7 @@ constexpr auto nodeDistBase = "https://nodejs.org/dist/";
 constexpr auto flutterIndexUrl =
     "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json";
 constexpr auto javaIndexBase = "https://api.adoptium.net/v3/assets/feature_releases/";
+constexpr auto pythonIndexUrl = "https://www.python.org/api/v2/downloads/release_file/?os=1";
 }
 
 ProviderController::ProviderController(QObject *parent)
@@ -121,7 +124,7 @@ void ProviderController::startEventBus()
 void ProviderController::loadVersions(const QString &providerId, bool forceRefresh)
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
-        && providerId != QStringLiteral("java")) {
+        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -148,12 +151,14 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             const bool applied = providerId == QStringLiteral("node")
                 ? applyNodeIndex(data)
                 : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
-                                                           : applyJavaIndex(data);
+                : providerId == QStringLiteral("java") ? applyJavaIndex(data)
+                                                       : applyPythonIndex(data);
             if (applied) {
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                     : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
-                                                               : QStringLiteral("Java")));
+                    : providerId == QStringLiteral("java") ? QStringLiteral("Java")
+                                                           : QStringLiteral("Python")));
                 return;
             }
         }
@@ -163,7 +168,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
     const QString displayName = providerId == QStringLiteral("node")
         ? QStringLiteral("Node.js")
         : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
-                                                   : QStringLiteral("Java");
+        : providerId == QStringLiteral("java") ? QStringLiteral("Java")
+                                               : QStringLiteral("Python");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
@@ -174,7 +180,9 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
 
     const QUrl indexUrl(providerId == QStringLiteral("node")
                             ? QString::fromLatin1(nodeIndexUrl)
-                            : QString::fromLatin1(flutterIndexUrl));
+                        : providerId == QStringLiteral("flutter")
+                            ? QString::fromLatin1(flutterIndexUrl)
+                            : QString::fromLatin1(pythonIndexUrl));
     m_reply = m_network.get(QNetworkRequest(indexUrl));
     connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
         QNetworkReply *reply = m_reply;
@@ -191,7 +199,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         const bool applied = providerId == QStringLiteral("node")
             ? applyNodeIndex(data)
             : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
-                                                       : applyJavaIndex(data);
+            : providerId == QStringLiteral("java") ? applyJavaIndex(data)
+                                                   : applyPythonIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -406,6 +415,55 @@ bool ProviderController::applyJavaIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyPythonIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray())
+        return false;
+
+    static const QRegularExpression installerPattern(
+        QStringLiteral(R"(/python/(\d+\.\d+\.\d+)/python-\1-amd64\.exe$)"));
+    QVariantList versions;
+    for (const QJsonValue &value : document.array()) {
+        const QJsonObject file = value.toObject();
+        if (file.value(QStringLiteral("name")).toString()
+            != QStringLiteral("Windows installer (64-bit)")) {
+            continue;
+        }
+        const QString url = file.value(QStringLiteral("url")).toString();
+        const QRegularExpressionMatch match = installerPattern.match(url);
+        const QString checksum = file.value(QStringLiteral("sha256_sum")).toString().toLower();
+        if (!match.hasMatch())
+            continue;
+
+        const QString version = match.captured(1);
+        const QStringList versionParts = version.split(u'.');
+        if (versionParts.value(0).toInt() != 3 || versionParts.value(1).toInt() < 10)
+            continue;
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"), QStringLiteral("stable"));
+        item.insert(QStringLiteral("released"), QStringLiteral("—"));
+        const qint64 size = file.value(QStringLiteral("filesize")).toInteger();
+        item.insert(QStringLiteral("size"),
+                    size > 0 ? QStringLiteral("%1 MB").arg(size / 1024 / 1024)
+                             : QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"), version.startsWith(QStringLiteral("3.14.")));
+        item.insert(QStringLiteral("downloadUrl"), url);
+        item.insert(QStringLiteral("sha256"), checksum);
+        item.insert(QStringLiteral("verification"),
+                    checksum.size() == 64 ? QStringLiteral("sha256")
+                                          : QStringLiteral("authenticode"));
+        versions.append(item);
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -426,7 +484,7 @@ QString ProviderController::downloadManifestPath(const QString &providerId, cons
 void ProviderController::download(const QString &providerId, const QString &version)
 {
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
-        && providerId != QStringLiteral("java")) {
+        && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
@@ -461,19 +519,25 @@ void ProviderController::download(const QString &providerId, const QString &vers
         fileName = nodeFileName(version);
         url = QUrl(QString::fromLatin1(nodeDistBase) + u'v' + version + u'/' + fileName);
     } else {
+        QString verification;
         for (const QVariant &entry : std::as_const(m_versions)) {
             const QVariantMap release = entry.toMap();
             if (release.value(QStringLiteral("version")).toString() == version) {
                 url = QUrl(release.value(QStringLiteral("downloadUrl")).toString());
                 m_expectedHash = release.value(QStringLiteral("sha256")).toByteArray();
+                verification = release.value(QStringLiteral("verification")).toString();
                 break;
             }
         }
         fileName = QFileInfo(url.path()).fileName();
-        if (!url.isValid() || fileName.isEmpty() || m_expectedHash.size() != 64) {
+        const bool validVerification = m_expectedHash.size() == 64
+            || (providerId == QStringLiteral("python")
+                && verification == QStringLiteral("authenticode"));
+        if (!url.isValid() || fileName.isEmpty() || !validVerification) {
             setError(tr("找不到 %1 %2 的官方安装包信息")
-                         .arg(providerId == QStringLiteral("java")
-                                  ? QStringLiteral("Java") : QStringLiteral("Flutter"),
+                         .arg(providerId == QStringLiteral("java") ? QStringLiteral("Java")
+                              : providerId == QStringLiteral("python") ? QStringLiteral("Python")
+                                                                       : QStringLiteral("Flutter"),
                               version));
             return;
         }
@@ -494,7 +558,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     setStatus(tr("正在下载 %1 %2…")
                   .arg(providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                        : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
-                                                                 : QStringLiteral("Java"),
+                       : providerId == QStringLiteral("java") ? QStringLiteral("Java")
+                                                              : QStringLiteral("Python"),
                        version));
     setBusy(true);
 
@@ -553,6 +618,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
         reply->deleteLater();
         if (m_providerId == QStringLiteral("node"))
             fetchNodeChecksum();
+        else if (m_providerId == QStringLiteral("python") && m_expectedHash.isEmpty())
+            verifyPythonDownload();
         else
             verifyDownloadedFile(m_expectedHash);
     });
@@ -603,6 +670,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
     }
     if (providerId == QStringLiteral("java")) {
         installAndActivateJava(version);
+        return;
+    }
+    if (providerId == QStringLiteral("python")) {
+        installAndActivatePython(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -783,10 +854,58 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
     setStatus(tr("%1 %2 下载并校验完成")
                   .arg(m_providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                        : m_providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
-                                                                   : QStringLiteral("Java"),
+                       : m_providerId == QStringLiteral("java") ? QStringLiteral("Java")
+                                                                : QStringLiteral("Python"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
+}
+
+void ProviderController::verifyPythonDownload()
+{
+#ifdef Q_OS_WIN
+    const QString nativePath = QDir::toNativeSeparators(m_downloadFile.fileName());
+    WINTRUST_FILE_INFO fileInfo{};
+    fileInfo.cbStruct = sizeof(fileInfo);
+    fileInfo.pcwszFilePath = reinterpret_cast<LPCWSTR>(nativePath.utf16());
+
+    GUID policy = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+    WINTRUST_DATA trustData{};
+    trustData.cbStruct = sizeof(trustData);
+    trustData.dwUIChoice = WTD_UI_NONE;
+    trustData.fdwRevocationChecks = WTD_REVOKE_WHOLECHAIN;
+    trustData.dwUnionChoice = WTD_CHOICE_FILE;
+    trustData.pFile = &fileInfo;
+    trustData.dwStateAction = WTD_STATEACTION_VERIFY;
+    trustData.dwProvFlags = WTD_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT;
+
+    const LONG result = WinVerifyTrust(nullptr, &policy, &trustData);
+    trustData.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(nullptr, &policy, &trustData);
+    if (result != ERROR_SUCCESS) {
+        QFile::remove(m_downloadFile.fileName());
+        fail(tr("Python 官方安装程序的 Authenticode 签名验证失败（错误 0x%1）")
+                 .arg(qulonglong(result), 8, 16, QLatin1Char('0')));
+        return;
+    }
+
+    // The embedded signature authenticates the complete executable. Hash it as
+    // well so the local manifest can detect later corruption without network access.
+    QFile file(m_downloadFile.fileName());
+    if (!file.open(QIODevice::ReadOnly)) {
+        fail(tr("无法读取 Python 安装程序"));
+        return;
+    }
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    if (!hash.addData(&file)) {
+        fail(tr("无法计算 Python 安装程序的 SHA-256"));
+        return;
+    }
+    verifyDownloadedFile(hash.result().toHex());
+#else
+    QFile::remove(m_downloadFile.fileName());
+    fail(tr("当前平台不支持 Python 安装程序签名验证"));
+#endif
 }
 
 QString ProviderController::nodeFileName(const QString &version) const
@@ -1180,6 +1299,113 @@ bool ProviderController::activateJava(const QString &version)
     return true;
 }
 
+void ProviderController::installAndActivatePython(const QString &version)
+{
+    const QString pythonExe = installDirectory(QStringLiteral("python"), version)
+        + QStringLiteral("/python.exe");
+    if (QFileInfo(pythonExe).isFile()) {
+        if (m_makeDefaultAfterInstall && !activatePython(version))
+            setError(tr("无法激活 Python %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+
+    QFile manifest(downloadManifestPath(QStringLiteral("python"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("Python %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString installer =
+        downloadDirectory(QStringLiteral("python"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(installer).isFile()) {
+        setError(tr("Python %1 安装程序不存在").arg(version));
+        return;
+    }
+
+    const QString destination = installDirectory(QStringLiteral("python"), version);
+    if (QFileInfo(destination).exists()) {
+        setError(tr("Python %1 安装目录已存在，请先修复或删除该版本").arg(version));
+        return;
+    }
+    if (!QDir().mkpath(QFileInfo(destination).absolutePath())) {
+        setError(tr("无法创建 Python 安装根目录"));
+        return;
+    }
+
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("python");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在安装 Python %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart)
+            fail(tr("无法启动 Python 官方安装程序"));
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        const QString version = m_pendingInstallVersion;
+        const QString destination = installDirectory(QStringLiteral("python"), version);
+        if (exitStatus != QProcess::NormalExit || exitCode != 0
+            || !QFileInfo(destination + QStringLiteral("/python.exe")).isFile()) {
+            fail(tr("Python %1 安装失败（退出码 %2）").arg(version).arg(exitCode));
+            return;
+        }
+        if (m_makeDefaultAfterInstall && !activatePython(version)) {
+            fail(tr("Python 已安装，但写入系统 PATH 失败"));
+            return;
+        }
+        setStatus(tr("Python %1 安装完成").arg(version));
+        setProgress(1.0);
+        setBusy(false);
+    });
+
+    m_installProcess.start(
+        installer,
+        {QStringLiteral("/quiet"), QStringLiteral("InstallAllUsers=0"),
+         QStringLiteral("TargetDir=%1").arg(QDir::toNativeSeparators(destination)),
+         QStringLiteral("Include_launcher=0"), QStringLiteral("Include_pip=1"),
+         QStringLiteral("Include_tcltk=1"), QStringLiteral("Include_test=0"),
+         QStringLiteral("Include_doc=0"), QStringLiteral("AssociateFiles=0"),
+         QStringLiteral("Shortcuts=0"), QStringLiteral("PrependPath=0"),
+         QStringLiteral("AppendPath=0")});
+}
+
+bool ProviderController::activatePython(const QString &version)
+{
+    const QString root = installDirectory(QStringLiteral("python"), version);
+    if (!writeCommandShim(QStringLiteral("python"), root + QStringLiteral("/python.exe"))
+        || !writeCommandShim(QStringLiteral("pip"), root + QStringLiteral("/Scripts/pip.exe"))
+        || !ensureShimPath()) {
+        return false;
+    }
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("python"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("Python %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
 bool ProviderController::deactivateProvider(const QString &providerId)
 {
     QStringList shimNames;
@@ -1190,6 +1416,8 @@ bool ProviderController::deactivateProvider(const QString &providerId)
     else if (providerId == QStringLiteral("java"))
         shimNames = {QStringLiteral("java"), QStringLiteral("javac"), QStringLiteral("jar"),
                      QStringLiteral("javadoc"), QStringLiteral("jshell")};
+    else if (providerId == QStringLiteral("python"))
+        shimNames = {QStringLiteral("python"), QStringLiteral("pip")};
     else
         return false;
 
