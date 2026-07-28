@@ -20,6 +20,8 @@ class ProviderController final : public QObject
     Q_PROPERTY(QString error READ error NOTIFY errorChanged)
     Q_PROPERTY(QString activeProvider READ activeProvider NOTIFY activeProviderChanged)
     Q_PROPERTY(QString activeVersion READ activeVersion NOTIFY activeVersionChanged)
+    Q_PROPERTY(bool removing READ removing NOTIFY removingChanged)
+    Q_PROPERTY(bool settingDefault READ settingDefault NOTIFY settingDefaultChanged)
     Q_PROPERTY(QVariantMap defaultVersions READ defaultVersions NOTIFY defaultVersionsChanged)
 
 public:
@@ -33,6 +35,8 @@ public:
     QString error() const;
     QString activeProvider() const;
     QString activeVersion() const;
+    bool removing() const;
+    bool settingDefault() const;
     QVariantMap defaultVersions() const;
 
     Q_INVOKABLE void loadVersions(const QString &providerId, bool forceRefresh = false);
@@ -42,6 +46,7 @@ public:
     Q_INVOKABLE void installDownloaded(const QString &providerId, const QString &version,
                                        bool makeDefault = false);
     Q_INVOKABLE void setDefaultVersion(const QString &providerId, const QString &version);
+    Q_INVOKABLE void clearDefaultVersion(const QString &providerId);
     Q_INVOKABLE void removeDownloaded(const QString &providerId, const QString &version);
     Q_INVOKABLE void cancel();
 
@@ -53,6 +58,8 @@ signals:
     void errorChanged();
     void activeProviderChanged();
     void activeVersionChanged();
+    void removingChanged();
+    void settingDefaultChanged();
     void defaultVersionsChanged();
     void downloadFinished(const QString &providerId, const QString &version, const QString &path);
     void downloadRemoved(const QString &providerId, const QString &version);
@@ -112,6 +119,8 @@ private:
     QString m_error;
     QString m_providerId;
     QString m_version;
+    bool m_removing = false;
+    bool m_settingDefault = false;
     QString m_downloadPath;
     qint64 m_resumeOffset = 0;
     QByteArray m_expectedHash;

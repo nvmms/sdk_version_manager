@@ -58,6 +58,8 @@ QString ProviderController::status() const { return m_status; }
 QString ProviderController::error() const { return m_error; }
 QString ProviderController::activeProvider() const { return m_providerId; }
 QString ProviderController::activeVersion() const { return m_version; }
+bool ProviderController::removing() const { return m_removing; }
+bool ProviderController::settingDefault() const { return m_settingDefault; }
 QVariantMap ProviderController::defaultVersions() const { return m_defaultVersions; }
 
 void ProviderController::startEventBus()
@@ -929,7 +931,56 @@ bool ProviderController::isDownloaded(const QString &providerId, const QString &
 
 void ProviderController::setDefaultVersion(const QString &providerId, const QString &version)
 {
-    installDownloaded(providerId, version, true);
+    if (m_busy || m_settingDefault) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+    if (!isDownloaded(providerId, version)) {
+        setError(tr("必须先下载 %1 %2，才能设为默认版本").arg(providerId, version));
+        return;
+    }
+    if (m_defaultVersions.value(providerId).toString() == version)
+        return;
+
+    if (m_providerId != providerId) {
+        m_providerId = providerId;
+        emit activeProviderChanged();
+    }
+    if (m_version != version) {
+        m_version = version;
+        emit activeVersionChanged();
+    }
+    setError({});
+    setStatus(tr("正在设置 %1 %2 为默认版本…").arg(providerId, version));
+    m_settingDefault = true;
+    emit settingDefaultChanged();
+
+    // Give QML one event-loop turn to repaint the disabled, busy button before
+    // activation performs synchronous filesystem and environment updates.
+    QTimer::singleShot(0, this, [this, providerId, version] {
+        installDownloaded(providerId, version, true);
+        if (!m_busy && m_settingDefault) {
+            m_settingDefault = false;
+            emit settingDefaultChanged();
+        }
+    });
+}
+
+void ProviderController::clearDefaultVersion(const QString &providerId)
+{
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+    if (!m_defaultVersions.contains(providerId))
+        return;
+
+    setError({});
+    if (!deactivateProvider(providerId)) {
+        setError(tr("无法完整移除 %1 的系统 PATH 指向").arg(providerId));
+        return;
+    }
+    setStatus(tr("%1 的默认版本已取消").arg(providerId));
 }
 
 void ProviderController::installDownloaded(const QString &providerId, const QString &version,
@@ -1013,6 +1064,8 @@ void ProviderController::removeDownloaded(const QString &providerId, const QStri
     setError({});
     setStatus(tr("正在删除 %1 %2…").arg(providerId, version));
     setProgress(0.0);
+    m_removing = true;
+    emit removingChanged();
     setBusy(true);
 
     auto *watcher = new QFutureWatcher<bool>(this);
@@ -1020,6 +1073,8 @@ void ProviderController::removeDownloaded(const QString &providerId, const QStri
             [this, watcher, providerId, version, removingDefault] {
         const bool removed = watcher->result();
         watcher->deleteLater();
+        m_removing = false;
+        emit removingChanged();
         setBusy(false);
         if (!removed) {
             setError(tr("无法完整删除 %1 %2，请检查文件是否被占用").arg(providerId, version));
@@ -2117,6 +2172,10 @@ void ProviderController::setBusy(bool busy)
     if (m_busy == busy) return;
     m_busy = busy;
     emit busyChanged();
+    if (!busy && m_settingDefault) {
+        m_settingDefault = false;
+        emit settingDefaultChanged();
+    }
 }
 
 void ProviderController::setProgress(double progress)

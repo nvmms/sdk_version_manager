@@ -1160,11 +1160,18 @@ ApplicationWindow {
                                                     visible: versionRow.installed
                                                     Layout.preferredWidth: 102
                                                     implicitHeight: 36
-                                                    enabled: !versionRow.defaultVersion && !providerController.busy
+                                                    enabled: !providerController.busy
+                                                             && !providerController.settingDefault
 
                                                     contentItem: Text {
-                                                        text: versionRow.defaultVersion
-                                                              ? qsTr("★  默认版本")
+                                                        text: providerController.settingDefault
+                                                              && providerController.activeProvider
+                                                                 === window.selectedItem().key
+                                                              && providerController.activeVersion
+                                                                 === modelData.version
+                                                              ? qsTr("设置中…")
+                                                              : versionRow.defaultVersion
+                                                              ? qsTr("取消默认")
                                                               : qsTr("设为默认")
                                                         color: versionRow.defaultVersion ? "#f2c96d" : "#a9bad0"
                                                         font.pixelSize: 11
@@ -1181,9 +1188,16 @@ ApplicationWindow {
                                                         border.color: versionRow.defaultVersion ? "#655224" : "#344154"
                                                     }
 
-                                                    onClicked: providerController.setDefaultVersion(
-                                                                   window.selectedItem().key,
-                                                                   modelData.version)
+                                                    onClicked: {
+                                                        if (versionRow.defaultVersion) {
+                                                            providerController.clearDefaultVersion(
+                                                                window.selectedItem().key)
+                                                        } else {
+                                                            providerController.setDefaultVersion(
+                                                                window.selectedItem().key,
+                                                                modelData.version)
+                                                        }
+                                                    }
                                                 }
 
                                                 Button {
@@ -1194,6 +1208,7 @@ ApplicationWindow {
 
                                                     contentItem: Text {
                                                         text: providerController.busy
+                                                                && providerController.removing
                                                                 && providerController.activeProvider
                                                                    === window.selectedItem().key
                                                                 && providerController.activeVersion === modelData.version
