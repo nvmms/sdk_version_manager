@@ -4,6 +4,7 @@
 #include <QNetworkAccessManager>
 #include <QObject>
 #include <QProcess>
+#include <QPointer>
 #include <QVariantList>
 
 class QNetworkReply;
@@ -66,6 +67,8 @@ private:
     void verifyDownloadedFile(const QByteArray &expectedHash);
     bool applyNodeIndex(const QByteArray &data);
     bool applyFlutterIndex(const QByteArray &data);
+    bool applyJavaIndex(const QByteArray &data);
+    void fetchJavaIndexes();
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;
     QString downloadManifestPath(const QString &providerId, const QString &version) const;
@@ -78,6 +81,8 @@ private:
     bool activateNode(const QString &version);
     void installAndActivateFlutter(const QString &version);
     bool activateFlutter(const QString &version);
+    void installAndActivateJava(const QString &version);
+    bool activateJava(const QString &version);
     bool deactivateProvider(const QString &providerId);
     bool ensureShimPath();
     bool writeCommandShim(const QString &name, const QString &target);
@@ -85,6 +90,7 @@ private:
 
     QNetworkAccessManager m_network;
     QNetworkReply *m_reply = nullptr;
+    QList<QPointer<QNetworkReply>> m_javaReplies;
     QFile m_downloadFile;
     QVariantList m_versions;
     bool m_busy = false;

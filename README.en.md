@@ -5,7 +5,7 @@
 SDK Version Manager (SVM) is a local-first, cross-platform development environment manager built with Qt 6. It provides both a desktop GUI and the `svm` CLI for managing the SDK versions used by a project.
 
 > [!IMPORTANT]
-> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js** and **Flutter**. Java, Python, web services, databases, and other capabilities remain on the roadmap.
+> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, and Java (Eclipse Temurin JDK)**. Python, web services, databases, and other capabilities remain on the roadmap.
 
 ## Download and install
 
@@ -151,7 +151,9 @@ running IDE might require a window reload or restart after changing the setting.
 3. The global default;
 4. The latest installed version.
 
-The currently supported CLI provider IDs are `node` and `flutter`.
+The currently supported CLI provider IDs are `node`, `flutter`, and `java`. The Java
+provider reads Windows x64 Temurin JDK ZIP releases from the official Eclipse Adoptium
+API and verifies the official SHA-256 before installation.
 
 ## Available today
 
@@ -161,7 +163,7 @@ The currently supported CLI provider IDs are `node` and `flutter`.
 - Set global default SDK versions;
 - Bind multiple SDK versions to a project through `.svmrc`;
 - Find the nearest `.svmrc` by walking up from the current directory;
-- Run the selected SDK through `svm node ...` or `svm flutter ...`;
+- Run the selected SDK through `svm node ...`, `svm flutter ...`, or `svm java ...`;
 - Print project SDK setup guidance for common IDEs from `svm use` without writing
   IDE-specific files;
 - Explicitly merge Flutter, Python, and Java settings with `svm ide vscode`;
@@ -260,7 +262,7 @@ makensis `
 ## Roadmap
 
 - Establish Provider, Operation, InstalledVersion, and PlatformAdapter abstractions;
-- Add Java and Python providers;
+- Add the Python provider and continue extracting common provider interfaces;
 - Add CLI commands such as `install` and `doctor`;
 - Improve recovery, cancellation, health checks, and automated tests;
 - Expand into Nginx, databases, and local services after the SDK MVP is stable;

@@ -91,6 +91,8 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/node.exe");
     if (provider == QStringLiteral("flutter"))
         return root + QStringLiteral("/bin/flutter.bat");
+    if (provider == QStringLiteral("java"))
+        return root + QStringLiteral("/bin/java.exe");
     return {};
 }
 
@@ -307,19 +309,21 @@ bool downloadAndInstall(const QString &provider, const QString &version)
     });
     heartbeat.start();
 
-    if (provider == QStringLiteral("flutter")) {
-        out << "Reading the Flutter version index..." << Qt::endl;
+    if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")) {
+        out << "Reading the " << provider << " version index..." << Qt::endl;
         controller.loadVersions(provider, false);
         waitUntilIdle(controller);
         if (!controller.error().isEmpty()) {
             publish(QStringLiteral("error"));
-            err << "Failed to load the Flutter version index." << Qt::endl;
+            err << "Failed to load the " << provider << " version index." << Qt::endl;
             return false;
         }
     }
 
-    const QString displayName =
-        provider == QStringLiteral("node") ? QStringLiteral("Node.js") : QStringLiteral("Flutter");
+    const QString displayName = provider == QStringLiteral("node")
+        ? QStringLiteral("Node.js")
+        : provider == QStringLiteral("flutter") ? QStringLiteral("Flutter")
+                                                 : QStringLiteral("Java");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -920,6 +924,27 @@ QVariantList cachedVersions(const QString &provider)
                         release.value(QStringLiteral("release_date")).toString().left(10));
             result.append(item);
         }
+    } else if (provider == QStringLiteral("java") && document.isArray()) {
+        for (const QJsonValue &value : document.array()) {
+            const QJsonObject release = value.toObject();
+            const QJsonObject versionData =
+                release.value(QStringLiteral("version_data")).toObject();
+            const QString version = QStringLiteral("%1.%2.%3")
+                .arg(versionData.value(QStringLiteral("major")).toInt())
+                .arg(versionData.value(QStringLiteral("minor")).toInt())
+                .arg(versionData.value(QStringLiteral("security")).toInt());
+            if (version.startsWith(QStringLiteral("0.")))
+                continue;
+            const int major = versionData.value(QStringLiteral("major")).toInt();
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version);
+            item.insert(QStringLiteral("channel"),
+                        QList<int>{8, 11, 17, 21, 25}.contains(major)
+                            ? QStringLiteral("LTS") : QStringLiteral("stable"));
+            item.insert(QStringLiteral("date"),
+                        release.value(QStringLiteral("release_date")).toString().left(10));
+            result.append(item);
+        }
     }
     return result;
 }
@@ -939,7 +964,8 @@ bool downloadedLocally(const QString &provider, const QString &version)
 
 int commandList(const QStringList &arguments)
 {
-    static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter")};
+    static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
+                                       QStringLiteral("java")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1055,8 +1081,13 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
                        QDir::toNativeSeparators(sdkBin) + u';'
                            + environment.value(QStringLiteral("PATH")));
     process.setProcessEnvironment(environment);
+    if (provider == QStringLiteral("java")) {
+        environment.insert(QStringLiteral("JAVA_HOME"),
+                           installedVersionDirectory(provider, version));
+        process.setProcessEnvironment(environment);
+    }
 
-    if (provider == QStringLiteral("node")) {
+    if (provider == QStringLiteral("node") || provider == QStringLiteral("java")) {
         process.start(executable, arguments);
     } else {
         for (const QString &argument : arguments) {
@@ -1100,6 +1131,7 @@ void printHelp()
            "  svm ide vscode\n"
            "  svm list lts node\n"
            "  svm node --version\n"
+           "  svm java --version\n"
            "  svm flutter doctor\n";
 }
 }
@@ -1126,7 +1158,8 @@ int main(int argc, char *argv[])
         return commandIde(arguments);
     if (command == QStringLiteral("list"))
         return commandList(arguments);
-    if (command == QStringLiteral("node") || command == QStringLiteral("flutter"))
+    if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
+        || command == QStringLiteral("java"))
         return proxyCommand(command, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;

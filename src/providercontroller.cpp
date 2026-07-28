@@ -12,6 +12,7 @@
 #include <QNetworkReply>
 #include <QRegularExpression>
 #include <QSaveFile>
+#include <QSharedPointer>
 #include <QSettings>
 #include <QStandardPaths>
 #include <QTimer>
@@ -28,6 +29,7 @@ constexpr auto nodeIndexUrl = "https://nodejs.org/dist/index.json";
 constexpr auto nodeDistBase = "https://nodejs.org/dist/";
 constexpr auto flutterIndexUrl =
     "https://storage.googleapis.com/flutter_infra_release/releases/releases_windows.json";
+constexpr auto javaIndexBase = "https://api.adoptium.net/v3/assets/feature_releases/";
 }
 
 ProviderController::ProviderController(QObject *parent)
@@ -118,7 +120,8 @@ void ProviderController::startEventBus()
 
 void ProviderController::loadVersions(const QString &providerId, bool forceRefresh)
 {
-    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")) {
+    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
+        && providerId != QStringLiteral("java")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -144,11 +147,13 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             const QByteArray data = cache.readAll();
             const bool applied = providerId == QStringLiteral("node")
                 ? applyNodeIndex(data)
-                : applyFlutterIndex(data);
+                : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
+                                                           : applyJavaIndex(data);
             if (applied) {
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
-                                                         : QStringLiteral("Flutter")));
+                    : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
+                                                               : QStringLiteral("Java")));
                 return;
             }
         }
@@ -156,10 +161,16 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
 
     setError({});
     const QString displayName = providerId == QStringLiteral("node")
-        ? QStringLiteral("Node.js") : QStringLiteral("Flutter");
+        ? QStringLiteral("Node.js")
+        : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
+                                                   : QStringLiteral("Java");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
+    if (providerId == QStringLiteral("java")) {
+        fetchJavaIndexes();
+        return;
+    }
 
     const QUrl indexUrl(providerId == QStringLiteral("node")
                             ? QString::fromLatin1(nodeIndexUrl)
@@ -179,7 +190,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         reply->deleteLater();
         const bool applied = providerId == QStringLiteral("node")
             ? applyNodeIndex(data)
-            : applyFlutterIndex(data);
+            : providerId == QStringLiteral("flutter") ? applyFlutterIndex(data)
+                                                       : applyJavaIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -196,6 +208,60 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         setStatus(tr("已从 %1 官方源获取 %2 个版本").arg(displayName).arg(m_versions.size()));
         setBusy(false);
     });
+}
+
+void ProviderController::fetchJavaIndexes()
+{
+    const QList<int> featureVersions{8, 11, 17, 21, 25};
+    auto combined = QSharedPointer<QJsonArray>::create();
+    auto remaining = QSharedPointer<int>::create(featureVersions.size());
+    auto errors = QSharedPointer<QStringList>::create();
+    m_javaReplies.clear();
+
+    for (const int featureVersion : featureVersions) {
+        const QUrl url(QString::fromLatin1(javaIndexBase) + QString::number(featureVersion)
+                       + QStringLiteral("/ga?architecture=x64&heap_size=normal&image_type=jdk"
+                                        "&jvm_impl=hotspot&os=windows&page=0&page_size=20"
+                                        "&project=jdk&sort_method=DATE&sort_order=DESC&vendor=eclipse"));
+        QNetworkReply *reply = m_network.get(QNetworkRequest(url));
+        m_javaReplies.append(reply);
+        connect(reply, &QNetworkReply::finished, this,
+                [this, reply, combined, remaining, errors, featureVersion] {
+            if (reply->error() == QNetworkReply::NoError) {
+                const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
+                if (document.isArray()) {
+                    for (const QJsonValue &value : document.array())
+                        combined->append(value);
+                } else {
+                    errors->append(tr("Java %1 返回了无效索引").arg(featureVersion));
+                }
+            } else {
+                errors->append(tr("Java %1：%2").arg(featureVersion).arg(reply->errorString()));
+            }
+            m_javaReplies.removeAll(reply);
+            reply->deleteLater();
+            --*remaining;
+            if (*remaining != 0)
+                return;
+
+            const QByteArray data = QJsonDocument(*combined).toJson(QJsonDocument::Compact);
+            if (!applyJavaIndex(data)) {
+                fail(errors->isEmpty() ? tr("Java 版本索引格式无效")
+                                       : tr("获取 Java 版本失败：%1").arg(errors->join(u';')));
+                return;
+            }
+            QSaveFile cache(cachePath(QStringLiteral("java")));
+            QDir().mkpath(QFileInfo(cachePath(QStringLiteral("java"))).absolutePath());
+            if (cache.open(QIODevice::WriteOnly)) {
+                cache.write(data);
+                cache.commit();
+            }
+            setStatus(errors->isEmpty()
+                          ? tr("已从 Eclipse Adoptium 获取 %1 个 Java 版本").arg(m_versions.size())
+                          : tr("已获取 %1 个 Java 版本；部分主版本暂不可用").arg(m_versions.size()));
+            setBusy(false);
+        });
+    }
 }
 
 bool ProviderController::applyNodeIndex(const QByteArray &data)
@@ -290,6 +356,56 @@ bool ProviderController::applyFlutterIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyJavaIndex(const QByteArray &data)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(data, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isArray())
+        return false;
+
+    QVariantList versions;
+    for (const QJsonValue &value : document.array()) {
+        const QJsonObject release = value.toObject();
+        const QJsonArray binaries = release.value(QStringLiteral("binaries")).toArray();
+        if (binaries.isEmpty())
+            continue;
+        const QJsonObject binary = binaries.first().toObject();
+        const QJsonObject package = binary.value(QStringLiteral("package")).toObject();
+        const QJsonObject versionData = release.value(QStringLiteral("version_data")).toObject();
+        const QString version = QStringLiteral("%1.%2.%3")
+            .arg(versionData.value(QStringLiteral("major")).toInt())
+            .arg(versionData.value(QStringLiteral("minor")).toInt())
+            .arg(versionData.value(QStringLiteral("security")).toInt());
+        const QString link = package.value(QStringLiteral("link")).toString();
+        const QString checksum = package.value(QStringLiteral("checksum")).toString().toLower();
+        if (version.startsWith(QStringLiteral("0.")) || !QUrl(link).isValid()
+            || checksum.size() != 64)
+            continue;
+
+        const int major = versionData.value(QStringLiteral("major")).toInt();
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"),
+                    QList<int>{8, 11, 17, 21, 25}.contains(major)
+                        ? QStringLiteral("LTS") : QStringLiteral("stable"));
+        item.insert(QStringLiteral("released"),
+                    release.value(QStringLiteral("release_date")).toString().left(10));
+        const qint64 size = package.value(QStringLiteral("size")).toInteger();
+        item.insert(QStringLiteral("size"),
+                    size > 0 ? QStringLiteral("%1 MB").arg(size / 1024 / 1024)
+                             : QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"), major == 25);
+        item.insert(QStringLiteral("downloadUrl"), link);
+        item.insert(QStringLiteral("sha256"), checksum);
+        versions.append(item);
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -309,7 +425,8 @@ QString ProviderController::downloadManifestPath(const QString &providerId, cons
 
 void ProviderController::download(const QString &providerId, const QString &version)
 {
-    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")) {
+    if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
+        && providerId != QStringLiteral("java")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
@@ -354,7 +471,10 @@ void ProviderController::download(const QString &providerId, const QString &vers
         }
         fileName = QFileInfo(url.path()).fileName();
         if (!url.isValid() || fileName.isEmpty() || m_expectedHash.size() != 64) {
-            setError(tr("找不到 Flutter %1 的官方安装包信息").arg(version));
+            setError(tr("找不到 %1 %2 的官方安装包信息")
+                         .arg(providerId == QStringLiteral("java")
+                                  ? QStringLiteral("Java") : QStringLiteral("Flutter"),
+                              version));
             return;
         }
     }
@@ -373,7 +493,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     setProgress(0.0);
     setStatus(tr("正在下载 %1 %2…")
                   .arg(providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
-                                                            : QStringLiteral("Flutter"),
+                       : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
+                                                                 : QStringLiteral("Java"),
                        version));
     setBusy(true);
 
@@ -480,6 +601,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
         installAndActivateFlutter(version);
         return;
     }
+    if (providerId == QStringLiteral("java")) {
+        installAndActivateJava(version);
+        return;
+    }
     if (providerId != QStringLiteral("node")) {
         setError(tr("%1 Provider 尚未实现系统 PATH 激活").arg(providerId));
         return;
@@ -569,6 +694,10 @@ void ProviderController::cancel()
     if (m_installProcess.state() != QProcess::NotRunning) {
         m_installProcess.kill();
     }
+    for (const QPointer<QNetworkReply> &reply : std::as_const(m_javaReplies)) {
+        if (reply)
+            reply->abort();
+    }
 }
 
 void ProviderController::fetchNodeChecksum()
@@ -653,7 +782,8 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
     setProgress(1.0);
     setStatus(tr("%1 %2 下载并校验完成")
                   .arg(m_providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
-                                                               : QStringLiteral("Flutter"),
+                       : m_providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
+                                                                   : QStringLiteral("Java"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
@@ -922,6 +1052,134 @@ bool ProviderController::activateFlutter(const QString &version)
     return true;
 }
 
+void ProviderController::installAndActivateJava(const QString &version)
+{
+    const QString installedJava = installDirectory(QStringLiteral("java"), version)
+        + QStringLiteral("/bin/java.exe");
+    if (QFileInfo(installedJava).isFile()) {
+        if (m_makeDefaultAfterInstall && !activateJava(version))
+            setError(tr("无法激活 Java %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+
+    QFile manifest(downloadManifestPath(QStringLiteral("java"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("Java %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive = downloadDirectory(QStringLiteral("java"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("Java %1 下载文件不存在").arg(version));
+        return;
+    }
+
+    const QString installsRoot =
+        QFileInfo(installDirectory(QStringLiteral("java"), version)).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if (staging.exists() && !staging.removeRecursively()) {
+        setError(tr("无法清理上次未完成的 Java 解压目录"));
+        return;
+    }
+    if (!QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 Java 安装目录"));
+        return;
+    }
+
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("java");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 Java %1…").arg(version));
+    setBusy(true);
+
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this, [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess,
+            qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
+            this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        if (exitStatus != QProcess::NormalExit || exitCode != 0) {
+            const QString details =
+                QString::fromLocal8Bit(m_installProcess.readAllStandardError()).trimmed();
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("解压 Java 失败：%1").arg(details));
+            return;
+        }
+
+        QDir staging(m_pendingStagingPath);
+        const QStringList roots = staging.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        if (roots.size() != 1
+            || !QFileInfo(staging.filePath(roots.first() + QStringLiteral("/bin/java.exe"))).isFile()) {
+            staging.removeRecursively();
+            fail(tr("Java 压缩包目录结构无效"));
+            return;
+        }
+        const QString destination =
+            installDirectory(QStringLiteral("java"), m_pendingInstallVersion);
+        if (QFileInfo(destination).exists()
+            || !QDir().rename(staging.filePath(roots.first()), destination)) {
+            staging.removeRecursively();
+            fail(tr("无法完成 Java 安装目录切换"));
+            return;
+        }
+        staging.removeRecursively();
+
+        if (m_makeDefaultAfterInstall && !activateJava(m_pendingInstallVersion)) {
+            fail(tr("Java 已解压，但写入系统 PATH 失败"));
+            return;
+        }
+        setStatus(tr("Java %1 安装完成").arg(m_pendingInstallVersion));
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"),
+                            m_pendingStagingPath});
+}
+
+bool ProviderController::activateJava(const QString &version)
+{
+    const QString bin = installDirectory(QStringLiteral("java"), version)
+        + QStringLiteral("/bin");
+    const QStringList commands{QStringLiteral("java"), QStringLiteral("javac"),
+                               QStringLiteral("jar"), QStringLiteral("javadoc"),
+                               QStringLiteral("jshell")};
+    for (const QString &command : commands) {
+        if (!writeCommandShim(command, bin + u'/' + command + QStringLiteral(".exe")))
+            return false;
+    }
+    if (!ensureShimPath())
+        return false;
+
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("java"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    setError({});
+    setStatus(tr("Java %1 已设为系统默认版本；新终端中生效").arg(version));
+    emit defaultVersionsChanged();
+    return true;
+}
+
 bool ProviderController::deactivateProvider(const QString &providerId)
 {
     QStringList shimNames;
@@ -929,6 +1187,9 @@ bool ProviderController::deactivateProvider(const QString &providerId)
         shimNames = {QStringLiteral("node"), QStringLiteral("npm"), QStringLiteral("npx")};
     else if (providerId == QStringLiteral("flutter"))
         shimNames = {QStringLiteral("flutter"), QStringLiteral("dart")};
+    else if (providerId == QStringLiteral("java"))
+        shimNames = {QStringLiteral("java"), QStringLiteral("javac"), QStringLiteral("jar"),
+                     QStringLiteral("javadoc"), QStringLiteral("jshell")};
     else
         return false;
 

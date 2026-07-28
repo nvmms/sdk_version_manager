@@ -38,7 +38,7 @@ ApplicationWindow {
     }
 
     function hasVersionProvider(providerKey) {
-        return providerKey === "flutter" || providerKey === "node"
+        return providerKey === "flutter" || providerKey === "node" || providerKey === "java"
     }
 
     function filterProviders(source, query) {
@@ -875,6 +875,7 @@ ApplicationWindow {
                                 FilterButton {
                                     text: "LTS"
                                     visible: window.selectedItem().key === "node"
+                                             || window.selectedItem().key === "java"
                                     current: window.versionFilter === "lts"
                                     onClicked: window.versionFilter = "lts"
                                 }
