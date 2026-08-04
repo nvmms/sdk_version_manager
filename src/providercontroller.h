@@ -5,6 +5,7 @@
 #include <QObject>
 #include <QProcess>
 #include <QPointer>
+#include <QTimer>
 #include <QVariantList>
 
 class QNetworkReply;
@@ -133,6 +134,9 @@ private:
     bool m_settingDefault = false;
     QString m_downloadPath;
     qint64 m_resumeOffset = 0;
+    qint64 m_expectedDownloadSize = 0;
+    QTimer m_downloadWatchdog;
+    bool m_downloadStalled = false;
     QByteArray m_expectedHash;
     QString m_verificationMode;
     QVariantMap m_defaultVersions;

@@ -50,6 +50,14 @@ constexpr auto goDistBase = "https://go.dev/dl/";
 ProviderController::ProviderController(QObject *parent)
     : QObject(parent)
 {
+    m_downloadWatchdog.setSingleShot(true);
+    m_downloadWatchdog.setInterval(30000);
+    connect(&m_downloadWatchdog, &QTimer::timeout, this, [this] {
+        if (!m_reply)
+            return;
+        m_downloadStalled = true;
+        m_reply->abort();
+    });
     QString proxyError;
     if (!applyConfiguredProxy(m_network, &proxyError))
         setError(proxyError);
@@ -972,6 +980,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     m_downloadPath = directory + u'/' + fileName;
     m_downloadFile.setFileName(m_downloadPath + QStringLiteral(".part"));
     m_resumeOffset = QFileInfo(m_downloadFile.fileName()).size();
+    m_expectedDownloadSize = 0;
+    m_downloadStalled = false;
     const QIODevice::OpenMode mode = QIODevice::WriteOnly
         | (m_resumeOffset > 0 ? QIODevice::Append : QIODevice::Truncate);
     if (!m_downloadFile.open(mode)) {
@@ -994,6 +1004,13 @@ void ProviderController::download(const QString &providerId, const QString &vers
     setBusy(true);
 
     QNetworkRequest request(url);
+    // Some CDN/proxy combinations return a malformed or stalled HTTP/2 response
+    // for redirected byte-range requests. HTTP/1.1 provides a reliable
+    // Content-Range and is required for resumable SDK archives.
+    request.setAttribute(QNetworkRequest::Http2AllowedAttribute, false);
+    // SDK archives are already compressed. Asking the CDN for an identity
+    // representation avoids Qt attempting to decompress a ranged ZIP stream.
+    request.setRawHeader("Accept-Encoding", "identity");
     if (m_resumeOffset > 0) {
         request.setRawHeader("Range", "bytes=" + QByteArray::number(m_resumeOffset) + '-');
     }
@@ -1004,11 +1021,26 @@ void ProviderController::download(const QString &providerId, const QString &vers
                                 : QString()));
     }
     m_reply = m_network.get(request);
+    m_downloadWatchdog.start();
     connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
         if (m_verbose && m_reply) {
-            emit diagnostic(QStringLiteral("HTTP %1 content-length=%2")
+            const QByteArray contentLength = m_reply->rawHeader("Content-Length");
+            const QByteArray contentRange = m_reply->rawHeader("Content-Range");
+            emit diagnostic(QStringLiteral("HTTP %1 content-length=%2 content-range=%3")
                                 .arg(m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
-                                .arg(m_reply->header(QNetworkRequest::ContentLengthHeader).toLongLong()));
+                                .arg(contentLength.isEmpty() ? QStringLiteral("unknown")
+                                                             : QString::fromLatin1(contentLength),
+                                     contentRange.isEmpty() ? QStringLiteral("none")
+                                                            : QString::fromLatin1(contentRange)));
+        }
+        if (m_reply) {
+            static const QRegularExpression totalPattern(QStringLiteral(R"(/(\d+)$)"));
+            const QRegularExpressionMatch match = totalPattern.match(
+                QString::fromLatin1(m_reply->rawHeader("Content-Range")));
+            if (match.hasMatch())
+                m_expectedDownloadSize = match.captured(1).toLongLong();
+            else
+                m_expectedDownloadSize = m_reply->rawHeader("Content-Length").toLongLong();
         }
         if (!m_reply || m_resumeOffset <= 0)
             return;
@@ -1025,15 +1057,19 @@ void ProviderController::download(const QString &providerId, const QString &vers
     connect(m_reply, &QNetworkReply::readyRead, this, [this] {
         if (m_reply && m_reply->isOpen() && m_reply->isReadable()) {
             m_downloadFile.write(m_reply->readAll());
+            m_downloadWatchdog.start();
         }
     });
     connect(m_reply, &QNetworkReply::downloadProgress, this, [this](qint64 received, qint64 total) {
-        if (total > 0) {
+        const qint64 completeSize = m_expectedDownloadSize > 0
+            ? m_expectedDownloadSize : total + m_resumeOffset;
+        if (completeSize > 0) {
             setProgress(static_cast<double>(received + m_resumeOffset)
-                        / static_cast<double>(total + m_resumeOffset));
+                        / static_cast<double>(completeSize));
         }
     });
     connect(m_reply, &QNetworkReply::finished, this, [this] {
+        m_downloadWatchdog.stop();
         QNetworkReply *reply = m_reply;
         m_reply = nullptr;
         if (reply->isOpen() && reply->isReadable())
@@ -1352,7 +1388,9 @@ void ProviderController::fetchMavenChecksum()
         QNetworkReply *reply = m_reply;
         m_reply = nullptr;
         if (reply->error() != QNetworkReply::NoError) {
-            const QString message = reply->errorString();
+            const QString message = m_downloadStalled
+                ? tr("代理或下载服务器连续 30 秒没有返回数据；已保留 .part，可重试续传")
+                : reply->errorString();
             reply->deleteLater();
             QFile::remove(m_downloadFile.fileName());
             fail(tr("获取 Maven SHA-512 校验值失败：%1").arg(message));
