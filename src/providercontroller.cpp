@@ -1,5 +1,6 @@
 #include "providercontroller.h"
 #include "eventbus.h"
+#include "networkproxyconfig.h"
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -10,6 +11,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
+#include <QNetworkProxy>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QSharedPointer>
@@ -46,6 +48,9 @@ constexpr auto goDistBase = "https://go.dev/dl/";
 ProviderController::ProviderController(QObject *parent)
     : QObject(parent)
 {
+    QString proxyError;
+    if (!applyConfiguredProxy(m_network, &proxyError))
+        setError(proxyError);
     loadDefaults();
     const QString cliExecutable = QCoreApplication::applicationDirPath() + QStringLiteral("/svm.exe");
     if (QFileInfo(cliExecutable).isFile())
@@ -63,6 +68,21 @@ QString ProviderController::activeVersion() const { return m_version; }
 bool ProviderController::removing() const { return m_removing; }
 bool ProviderController::settingDefault() const { return m_settingDefault; }
 QVariantMap ProviderController::defaultVersions() const { return m_defaultVersions; }
+
+void ProviderController::setVerbose(bool verbose)
+{
+    m_verbose = verbose;
+    if (!m_verbose)
+        return;
+    const QNetworkProxy proxy = m_network.proxy();
+    if (proxy.type() == QNetworkProxy::DefaultProxy
+        || proxy.type() == QNetworkProxy::NoProxy) {
+        emit diagnostic(QStringLiteral("network proxy: disabled"));
+    } else {
+        emit diagnostic(QStringLiteral("network proxy: HTTP %1:%2")
+                            .arg(proxy.hostName()).arg(proxy.port()));
+    }
+}
 
 void ProviderController::startEventBus()
 {
@@ -172,6 +192,9 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                 : providerId == QStringLiteral("go") ? applyGoIndex(data)
                                                      : applyPostgresqlIndex(data);
             if (applied && phpCacheHasArchives) {
+                if (m_verbose)
+                    emit diagnostic(QStringLiteral("version index: local cache %1")
+                                        .arg(cachePath(providerId)));
                 setStatus(tr("已读取本地 %1 版本缓存").arg(
                     providerId == QStringLiteral("node") ? QStringLiteral("Node.js")
                     : providerId == QStringLiteral("flutter") ? QStringLiteral("Flutter")
@@ -216,10 +239,19 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                         : providerId == QStringLiteral("postgresql")
                             ? QString::fromLatin1(postgresqlIndexUrl)
                             : QString::fromLatin1(goIndexUrl));
+    if (m_verbose)
+        emit diagnostic(QStringLiteral("GET %1").arg(indexUrl.toString()));
     m_reply = m_network.get(QNetworkRequest(indexUrl));
     connect(m_reply, &QNetworkReply::finished, this, [this, providerId, displayName] {
         QNetworkReply *reply = m_reply;
         m_reply = nullptr;
+        if (m_verbose) {
+            emit diagnostic(QStringLiteral("HTTP %1 %2%3")
+                                .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                                .arg(reply->url().toString(),
+                                     reply->error() == QNetworkReply::NoError
+                                         ? QString() : QStringLiteral(" error=") + reply->errorString()));
+        }
         if (reply->error() != QNetworkReply::NoError) {
             const QString message = reply->errorString();
             reply->deleteLater();
@@ -268,10 +300,19 @@ void ProviderController::fetchJavaIndexes()
                        + QStringLiteral("/ga?architecture=x64&heap_size=normal&image_type=jdk"
                                         "&jvm_impl=hotspot&os=windows&page=0&page_size=20"
                                         "&project=jdk&sort_method=DATE&sort_order=DESC&vendor=eclipse"));
+        if (m_verbose)
+            emit diagnostic(QStringLiteral("GET %1").arg(url.toString()));
         QNetworkReply *reply = m_network.get(QNetworkRequest(url));
         m_javaReplies.append(reply);
         connect(reply, &QNetworkReply::finished, this,
                 [this, reply, combined, remaining, errors, featureVersion] {
+            if (m_verbose) {
+                emit diagnostic(QStringLiteral("HTTP %1 %2%3")
+                                    .arg(reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                                    .arg(reply->url().toString(),
+                                         reply->error() == QNetworkReply::NoError
+                                             ? QString() : QStringLiteral(" error=") + reply->errorString()));
+            }
             if (reply->error() == QNetworkReply::NoError) {
                 const QJsonDocument document = QJsonDocument::fromJson(reply->readAll());
                 if (document.isArray()) {
@@ -901,8 +942,19 @@ void ProviderController::download(const QString &providerId, const QString &vers
     if (m_resumeOffset > 0) {
         request.setRawHeader("Range", "bytes=" + QByteArray::number(m_resumeOffset) + '-');
     }
+    if (m_verbose) {
+        emit diagnostic(QStringLiteral("GET %1%2")
+                            .arg(url.toString(), m_resumeOffset > 0
+                                ? QStringLiteral(" range=bytes=%1-").arg(m_resumeOffset)
+                                : QString()));
+    }
     m_reply = m_network.get(request);
     connect(m_reply, &QNetworkReply::metaDataChanged, this, [this] {
+        if (m_verbose && m_reply) {
+            emit diagnostic(QStringLiteral("HTTP %1 content-length=%2")
+                                .arg(m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())
+                                .arg(m_reply->header(QNetworkRequest::ContentLengthHeader).toLongLong()));
+        }
         if (!m_reply || m_resumeOffset <= 0)
             return;
         const int status =
@@ -916,7 +968,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
         }
     });
     connect(m_reply, &QNetworkReply::readyRead, this, [this] {
-        if (m_reply) {
+        if (m_reply && m_reply->isOpen() && m_reply->isReadable()) {
             m_downloadFile.write(m_reply->readAll());
         }
     });
@@ -929,7 +981,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     connect(m_reply, &QNetworkReply::finished, this, [this] {
         QNetworkReply *reply = m_reply;
         m_reply = nullptr;
-        m_downloadFile.write(reply->readAll());
+        if (reply->isOpen() && reply->isReadable())
+            m_downloadFile.write(reply->readAll());
         m_downloadFile.close();
         const int status =
             reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();

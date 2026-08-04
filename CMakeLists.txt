@@ -20,6 +20,8 @@ qt_add_executable(appsdk_version_manager
     main.cpp
     src/eventbus.cpp
     src/eventbus.h
+    src/networkproxyconfig.cpp
+    src/networkproxyconfig.h
     src/providercontroller.cpp
     src/providercontroller.h
 )
@@ -35,6 +37,8 @@ qt_add_executable(svm
     cli/main.cpp
     src/eventbus.cpp
     src/eventbus.h
+    src/networkproxyconfig.cpp
+    src/networkproxyconfig.h
     src/providercontroller.cpp
     src/providercontroller.h
 )

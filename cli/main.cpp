@@ -27,12 +27,14 @@
 #endif
 
 #include "../src/eventbus.h"
+#include "../src/networkproxyconfig.h"
 #include "../src/providercontroller.h"
 
 namespace {
 QTextStream out(stdout);
 QTextStream err(stderr);
 QTextStream input(stdin);
+bool verboseOutput = false;
 
 QString dataRoot()
 {
@@ -78,6 +80,50 @@ bool writeProjectBinding(const QString &root, const QString &provider, const QSt
     config.insert(QStringLiteral("schemaVersion"), 1);
     config.insert(QStringLiteral("sdks"), sdks);
     return writeObject(path, config);
+}
+
+bool appendGitignoreEntry(const QString &path, const QByteArray &content)
+{
+    QSaveFile file(path);
+    if (file.open(QIODevice::WriteOnly)) {
+        if (file.write(content) == content.size() && file.commit())
+            return true;
+        file.cancelWriting();
+    }
+
+    // On Windows, editors and file watchers can temporarily prevent QSaveFile from
+    // replacing an existing .gitignore. Recheck before using an in-place append so
+    // a concurrent writer cannot make us add the entry twice.
+    QFile fallback(path);
+    if (!fallback.open(QIODevice::ReadWrite))
+        return false;
+    QByteArray current = fallback.readAll();
+    const QList<QByteArray> lines = current.replace("\r\n", "\n").split('\n');
+    if (lines.contains(QByteArrayLiteral(".svm/")))
+        return true;
+    if (!fallback.seek(fallback.size()))
+        return false;
+    QByteArray suffix;
+    if (!current.isEmpty() && !current.endsWith('\n'))
+        suffix.append('\n');
+    suffix.append(".svm/\n");
+    return fallback.write(suffix) == suffix.size() && fallback.flush();
+}
+
+bool ensureProjectDirectoryIsIgnored(const QString &root)
+{
+    const QString path = QDir(root).filePath(QStringLiteral(".gitignore"));
+    QFile existing(path);
+    QByteArray content;
+    if (existing.open(QIODevice::ReadOnly))
+        content = existing.readAll();
+    const QList<QByteArray> lines = QByteArray(content).replace("\r\n", "\n").split('\n');
+    if (lines.contains(QByteArrayLiteral(".svm/")))
+        return true;
+    if (!content.isEmpty() && !content.endsWith('\n'))
+        content.append('\n');
+    content.append(".svm/\n");
+    return appendGitignoreEntry(path, content);
 }
 
 QString projectConfigPath(const QString &root)
@@ -309,9 +355,15 @@ void waitUntilIdle(ProviderController &controller)
 }
 
 bool downloadAndInstall(const QString &provider, const QString &version,
-                        bool allowUnverifiedArchive = false)
+                        bool allowUnverifiedArchive = false, bool verbose = false)
 {
     ProviderController controller;
+    QObject::connect(&controller, &ProviderController::diagnostic, &controller,
+                     [](const QString &message) {
+        out << '\r' << QString(100, u' ') << '\r' << Qt::flush;
+        err << "[verbose] " << message << Qt::endl;
+    });
+    controller.setVerbose(verbose);
     const auto publish = [&](const QString &type, double progress = -1.0) {
         QJsonObject event{
             {QStringLiteral("type"), type},
@@ -329,26 +381,45 @@ bool downloadAndInstall(const QString &provider, const QString &version,
     });
     heartbeat.start();
 
-    if (provider == QStringLiteral("flutter") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python") || provider == QStringLiteral("php")
-        || provider == QStringLiteral("go") || provider == QStringLiteral("postgresql")) {
-        out << "Reading the " << provider << " version index..." << Qt::endl;
-        controller.loadVersions(provider, false);
-        waitUntilIdle(controller);
-        if (!controller.error().isEmpty()) {
-            publish(QStringLiteral("error"));
-            err << "Failed to load the " << provider << " version index." << Qt::endl;
-            return false;
-        }
+    out << "Reading the " << provider << " version index..." << Qt::endl;
+    controller.loadVersions(provider, false);
+    waitUntilIdle(controller);
+    if (!controller.error().isEmpty() || controller.versions().isEmpty()) {
+        publish(QStringLiteral("error"));
+        err << "Failed to load the " << provider << " version index." << Qt::endl;
+        if (verbose && !controller.error().isEmpty())
+            err << "[verbose] " << controller.error() << Qt::endl;
+        return false;
     }
 
     bool unverifiedArchive = false;
+    bool versionFound = false;
+    QStringList matchingVersions;
     for (const QVariant &entry : controller.versions()) {
         const QVariantMap item = entry.toMap();
-        if (item.value(QStringLiteral("version")).toString() == version) {
+        const QString availableVersion = item.value(QStringLiteral("version")).toString();
+        if (availableVersion == version) {
+            versionFound = true;
             unverifiedArchive = item.value(QStringLiteral("unverified")).toBool();
-            break;
+        } else if (availableVersion.contains(version, Qt::CaseInsensitive)) {
+            matchingVersions.append(availableVersion);
         }
+    }
+    if (!versionFound) {
+        publish(QStringLiteral("error"));
+        err << provider << " version '" << version << "' was not found in the official index."
+            << Qt::endl;
+        if (!matchingVersions.isEmpty()) {
+            err << "Matching versions:" << Qt::endl;
+            const qsizetype limit = qMin<qsizetype>(matchingVersions.size(), 10);
+            for (qsizetype i = 0; i < limit; ++i)
+                err << "  " << matchingVersions[i] << Qt::endl;
+            if (matchingVersions.size() > limit)
+                err << "  ... and " << matchingVersions.size() - limit << " more" << Qt::endl;
+        } else {
+            err << "Run `svm list " << provider << "` to see available versions." << Qt::endl;
+        }
+        return false;
     }
     if (unverifiedArchive && !allowUnverifiedArchive) {
 #ifdef Q_OS_WIN
@@ -411,6 +482,8 @@ bool downloadAndInstall(const QString &provider, const QString &version,
         publish(QStringLiteral("error"));
         err << "Failed to download " << displayName << ' ' << version << '.'
             << QString(45, u' ') << Qt::endl;
+        if (verbose && !controller.error().isEmpty())
+            err << "[verbose] " << controller.error() << Qt::endl;
         return false;
     }
     if (lastPercent < 100) {
@@ -690,25 +763,9 @@ int commandInit(const QStringList &arguments)
     }
 
     const QString ignorePath = QDir(root).filePath(QStringLiteral(".gitignore"));
-    QFile existingIgnore(ignorePath);
-    QByteArray ignoreContent;
-    if (existingIgnore.open(QIODevice::ReadOnly))
-        ignoreContent = existingIgnore.readAll();
-    const QList<QByteArray> ignoreLines = ignoreContent.replace("\r\n", "\n").split('\n');
-    if (!ignoreLines.contains(QByteArrayLiteral(".svm/"))) {
-        if (!ignoreContent.isEmpty() && !ignoreContent.endsWith('\n'))
-            ignoreContent.append('\n');
-        ignoreContent.append(".svm/\n");
-        QSaveFile ignore(ignorePath);
-        if (!ignore.open(QIODevice::WriteOnly)) {
-            err << "Initialized config, but failed to update " << ignorePath << Qt::endl;
-            return 1;
-        }
-        ignore.write(ignoreContent);
-        if (!ignore.commit()) {
-            err << "Initialized config, but failed to update " << ignorePath << Qt::endl;
-            return 1;
-        }
+    if (!ensureProjectDirectoryIsIgnored(root)) {
+        err << "Initialized config, but failed to update " << ignorePath << Qt::endl;
+        return 1;
     }
     out << "Initialized SVM project: " << configPath << Qt::endl;
     return 0;
@@ -767,12 +824,9 @@ int commandUse(const QStringList &rawArguments)
         return 2;
     }
     QString root = findProjectRoot(QDir::currentPath());
-    if (root.isEmpty()) {
-        const int initResult = commandInit({});
-        if (initResult != 0)
-            return initResult;
+    const bool needsInitialization = root.isEmpty();
+    if (needsInitialization)
         root = QDir::currentPath();
-    }
 
     const QString provider = arguments[0].toLower();
     const QString version = arguments[1];
@@ -782,8 +836,18 @@ int commandUse(const QStringList &rawArguments)
         return 2;
     }
     if (!QFileInfo(executable).isFile()) {
-        if (!downloadAndInstall(provider, version, allowUnverifiedArchive))
+        if (!downloadAndInstall(provider, version, allowUnverifiedArchive, verboseOutput))
             return 3;
+    }
+
+    if (needsInitialization) {
+        const int initResult = commandInit({});
+        if (initResult != 0)
+            return initResult;
+    } else if (!ensureProjectDirectoryIsIgnored(root)) {
+        err << "Failed to update " << QDir(root).filePath(QStringLiteral(".gitignore"))
+            << Qt::endl;
+        return 1;
     }
 
     if (!writeProjectBinding(root, provider, version)) {
@@ -1265,6 +1329,228 @@ int commandList(const QStringList &arguments)
     return 0;
 }
 
+int commandProxy(const QStringList &arguments)
+{
+    if (arguments.isEmpty() || arguments == QStringList{QStringLiteral("show")}) {
+        const QString url = configuredProxyUrl();
+        out << (url.isEmpty() ? QStringLiteral("Proxy: disabled")
+                             : QStringLiteral("Proxy: %1").arg(url))
+            << Qt::endl;
+        return 0;
+    }
+    if (arguments == QStringList{QStringLiteral("clear")}) {
+        QString errorMessage;
+        if (!clearConfiguredProxy(&errorMessage)) {
+            err << errorMessage << Qt::endl;
+            return 1;
+        }
+        out << "Proxy cleared." << Qt::endl;
+        return 0;
+    }
+    if (arguments.size() == 2 && arguments[0] == QStringLiteral("set")) {
+        QString errorMessage;
+        if (!setConfiguredProxyUrl(arguments[1], &errorMessage)) {
+            err << errorMessage << Qt::endl;
+            return 2;
+        }
+        out << "Proxy set to " << arguments[1] << Qt::endl;
+        return 0;
+    }
+    err << "Usage: svm proxy [show|set <http-url>|clear]" << Qt::endl;
+    return 2;
+}
+
+QString quotePowerShell(const QString &value)
+{
+    QString escaped = value;
+    escaped.replace(u'\'', QStringLiteral("''"));
+    return u'\'' + escaped + u'\'';
+}
+
+int commandEnvironment(const QStringList &arguments)
+{
+    if (arguments != QStringList{QStringLiteral("powershell")}) {
+        err << "Usage: svm env powershell" << Qt::endl;
+        return 2;
+    }
+
+    out << "if (-not $env:SVM_ENV_INITIALIZED) {" << Qt::endl;
+    out << "  $env:SVM_BASE_PATH = $env:PATH" << Qt::endl;
+    out << "  $env:SVM_BASE_JAVA_HOME = $env:JAVA_HOME" << Qt::endl;
+    out << "  $env:SVM_BASE_GOROOT = $env:GOROOT" << Qt::endl;
+    out << "  $env:SVM_BASE_PHPRC = $env:PHPRC" << Qt::endl;
+    out << "  $env:SVM_ENV_INITIALIZED = '1'" << Qt::endl;
+    out << "}" << Qt::endl;
+    out << "$env:PATH = $env:SVM_BASE_PATH" << Qt::endl;
+    out << "if ($env:SVM_BASE_JAVA_HOME) { $env:JAVA_HOME = $env:SVM_BASE_JAVA_HOME } "
+           "else { Remove-Item Env:JAVA_HOME -ErrorAction SilentlyContinue }" << Qt::endl;
+    out << "if ($env:SVM_BASE_GOROOT) { $env:GOROOT = $env:SVM_BASE_GOROOT } "
+           "else { Remove-Item Env:GOROOT -ErrorAction SilentlyContinue }" << Qt::endl;
+    out << "if ($env:SVM_BASE_PHPRC) { $env:PHPRC = $env:SVM_BASE_PHPRC } "
+           "else { Remove-Item Env:PHPRC -ErrorAction SilentlyContinue }" << Qt::endl;
+    out << "Remove-Item Env:SVM_PROJECT_ROOT -ErrorAction SilentlyContinue" << Qt::endl;
+
+    const QString projectRoot = findProjectRoot(QDir::currentPath());
+    if (projectRoot.isEmpty())
+        return 0;
+
+    const QJsonObject sdks = readObject(projectConfigPath(projectRoot))
+                                  .value(QStringLiteral("sdks")).toObject();
+    QStringList paths;
+    for (auto it = sdks.constBegin(); it != sdks.constEnd(); ++it) {
+        const QString provider = it.key();
+        const QString version = it.value().toString();
+        const QString root = installedVersionDirectory(provider, version);
+        const QString executable = installedExecutable(provider, version);
+        if (!validToken(provider) || !validToken(version) || !QFileInfo(executable).isFile()) {
+            err << "Cannot activate " << provider << ' ' << version
+                << ": the managed installation is missing." << Qt::endl;
+            return 3;
+        }
+        if (provider == QStringLiteral("node") || provider == QStringLiteral("python")
+            || provider == QStringLiteral("php")) {
+            paths.append(root);
+        } else {
+            paths.append(QDir(root).filePath(QStringLiteral("bin")));
+        }
+        if (provider == QStringLiteral("python"))
+            paths.append(QDir(root).filePath(QStringLiteral("Scripts")));
+        if (provider == QStringLiteral("java"))
+            out << "$env:JAVA_HOME = " << quotePowerShell(QDir::toNativeSeparators(root))
+                << Qt::endl;
+        else if (provider == QStringLiteral("go"))
+            out << "$env:GOROOT = " << quotePowerShell(QDir::toNativeSeparators(root))
+                << Qt::endl;
+        else if (provider == QStringLiteral("php"))
+            out << "$env:PHPRC = " << quotePowerShell(QDir::toNativeSeparators(root))
+                << Qt::endl;
+    }
+    paths.removeDuplicates();
+    for (QString &path : paths)
+        path = QDir::toNativeSeparators(path);
+    if (!paths.isEmpty()) {
+        out << "$env:PATH = " << quotePowerShell(paths.join(u';') + u';')
+            << " + $env:SVM_BASE_PATH" << Qt::endl;
+    }
+    out << "$env:SVM_PROJECT_ROOT = "
+        << quotePowerShell(QDir::toNativeSeparators(projectRoot)) << Qt::endl;
+    return 0;
+}
+
+QString powerShellSingleQuoted(const QString &value)
+{
+    QString escaped = value;
+    escaped.replace(u'\'', QStringLiteral("''"));
+    return u'\'' + escaped + u'\'';
+}
+
+bool writeBytesAtomically(const QString &path, const QByteArray &content)
+{
+    if (!QDir().mkpath(QFileInfo(path).absolutePath()))
+        return false;
+    QSaveFile file(path);
+    if (file.open(QIODevice::WriteOnly) && file.write(content) == content.size()
+        && file.commit()) {
+        return true;
+    }
+    file.cancelWriting();
+
+    // Some Windows profile files cannot be atomically replaced while PowerShell
+    // startup is reading them. Preserve a recovery copy before the in-place fallback.
+    const QString backupPath = path + QStringLiteral(".svm-backup");
+    if (QFileInfo(path).isFile() && !QFileInfo(backupPath).exists()
+        && !QFile::copy(path, backupPath)) {
+        return false;
+    }
+    QFile fallback(path);
+    return fallback.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        && fallback.write(content) == content.size() && fallback.flush();
+}
+
+int commandShell(const QStringList &arguments)
+{
+    if (arguments.size() != 2 || arguments[1] != QStringLiteral("powershell")
+        || (arguments[0] != QStringLiteral("install")
+            && arguments[0] != QStringLiteral("uninstall"))) {
+        err << "Usage: svm shell <install|uninstall> powershell" << Qt::endl;
+        return 2;
+    }
+
+    const QString hookPath = dataRoot() + QStringLiteral("/shell/svm-hook.ps1");
+    const QByteArray marker("# SVM automatic environment hook");
+    const QString loadLine = QStringLiteral(". %1 %2")
+                                 .arg(powerShellSingleQuoted(QDir::toNativeSeparators(hookPath)),
+                                      QString::fromLatin1(marker));
+    const QString documents = QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
+    const QStringList profiles{
+        QDir(documents).filePath(QStringLiteral("WindowsPowerShell/profile.ps1")),
+        QDir(documents).filePath(QStringLiteral("PowerShell/profile.ps1"))
+    };
+
+    if (arguments[0] == QStringLiteral("install")) {
+        const QString executable = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+        const QString hook = QStringLiteral(
+            "# Managed by SDK Version Manager. Changes may be replaced.\r\n"
+            "if (-not $global:SvmEnvironmentHookLoaded) {\r\n"
+            "    $global:SvmEnvironmentHookLoaded = $true\r\n"
+            "    $script:SvmExecutable = %1\r\n"
+            "    $script:SvmLastDirectory = $null\r\n"
+            "    $script:SvmPreviousPrompt = $function:prompt\r\n"
+            "    function global:Update-SvmEnvironment {\r\n"
+            "        $currentDirectory = $ExecutionContext.SessionState.Path.CurrentFileSystemLocation.Path\r\n"
+            "        if ($script:SvmLastDirectory -eq $currentDirectory) { return }\r\n"
+            "        $script:SvmLastDirectory = $currentDirectory\r\n"
+            "        $environmentScript = @(& $script:SvmExecutable env powershell)\r\n"
+            "        if ($LASTEXITCODE -eq 0 -and $environmentScript.Count -gt 0) {\r\n"
+            "            Invoke-Expression ($environmentScript -join \"`n\")\r\n"
+            "        }\r\n"
+            "    }\r\n"
+            "    function global:prompt {\r\n"
+            "        Update-SvmEnvironment\r\n"
+            "        if ($script:SvmPreviousPrompt) { & $script:SvmPreviousPrompt }\r\n"
+            "        else { \"PS $($ExecutionContext.SessionState.Path.CurrentLocation)> \" }\r\n"
+            "    }\r\n"
+            "    Update-SvmEnvironment\r\n"
+            "}\r\n").arg(powerShellSingleQuoted(executable));
+        if (!writeBytesAtomically(hookPath, hook.toUtf8())) {
+            err << "Failed to write PowerShell hook: " << hookPath << Qt::endl;
+            return 1;
+        }
+    }
+
+    for (const QString &profilePath : profiles) {
+        QFile file(profilePath);
+        QByteArray content;
+        if (file.open(QIODevice::ReadOnly))
+            content = file.readAll();
+        QList<QByteArray> lines = content.replace("\r\n", "\n").split('\n');
+        for (qsizetype i = lines.size() - 1; i >= 0; --i) {
+            if (lines[i].contains(marker))
+                lines.removeAt(i);
+        }
+        while (!lines.isEmpty() && lines.last().isEmpty())
+            lines.removeLast();
+        if (arguments[0] == QStringLiteral("install"))
+            lines.append(loadLine.toUtf8());
+        QByteArray updated = lines.join("\r\n");
+        if (!updated.isEmpty())
+            updated.append("\r\n");
+        if (!writeBytesAtomically(profilePath, updated)) {
+            err << "Failed to update PowerShell profile: " << profilePath << Qt::endl;
+            return 1;
+        }
+        if (arguments[0] == QStringLiteral("uninstall"))
+            QFile::remove(profilePath + QStringLiteral(".svm-backup"));
+    }
+
+    if (arguments[0] == QStringLiteral("uninstall")) {
+        QFile::remove(hookPath);
+        QDir().rmdir(QFileInfo(hookPath).absolutePath());
+    }
+    out << "PowerShell automatic environment hook " << arguments[0] << "ed." << Qt::endl;
+    return 0;
+}
+
 QString quoteForCmd(const QString &argument)
 {
     QString escaped = argument;
@@ -1350,16 +1636,22 @@ void printHelp()
 {
     out << "SVM - SDK Version Manager\n\n"
            "Usage:\n"
+           "  svm -v <command> [arguments...]\n"
            "  svm init\n"
            "  svm use [provider [version]]\n"
            "  svm use php <legacy-version> --allow-unverified-archive\n"
            "  svm ide [vscode|idea|android-studio]\n"
            "  svm list [filter] [provider]\n"
+           "  svm proxy [show|set <http-url>|clear]\n"
+           "  svm env powershell\n"
+           "  svm shell <install|uninstall> powershell\n"
            "  svm <provider> [arguments...]\n\n"
            "Examples:\n"
+           "  svm -v use java 17.0.19\n"
            "  svm use node 24.18.0\n"
            "  svm ide vscode\n"
            "  svm list lts node\n"
+           "  svm proxy set http://127.0.0.1:7890\n"
            "  svm node --version\n"
            "  svm java --version\n"
            "  svm python --version\n"
@@ -1378,6 +1670,12 @@ int main(int argc, char *argv[])
 
     QStringList arguments = application.arguments();
     arguments.removeFirst();
+    if (!arguments.isEmpty()
+        && (arguments.first() == QStringLiteral("-v")
+            || arguments.first() == QStringLiteral("--verbose"))) {
+        verboseOutput = true;
+        arguments.removeFirst();
+    }
     if (arguments.isEmpty() || arguments.first() == QStringLiteral("--help")
         || arguments.first() == QStringLiteral("-h")) {
         printHelp();
@@ -1393,6 +1691,12 @@ int main(int argc, char *argv[])
         return commandIde(arguments);
     if (command == QStringLiteral("list"))
         return commandList(arguments);
+    if (command == QStringLiteral("proxy"))
+        return commandProxy(arguments);
+    if (command == QStringLiteral("env"))
+        return commandEnvironment(arguments);
+    if (command == QStringLiteral("shell"))
+        return commandShell(arguments);
     if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
         || command == QStringLiteral("java") || command == QStringLiteral("python")
         || command == QStringLiteral("php") || command == QStringLiteral("go")

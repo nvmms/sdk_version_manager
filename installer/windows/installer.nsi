@@ -73,6 +73,7 @@ Section "SDK Version Manager" SecMain
   SectionIn RO
   SetOutPath "$INSTDIR"
   File /r "${RELEASE_DIR}\*.*"
+  ExecWait '"$INSTDIR\bin\svm.exe" shell install powershell'
 
   !insertmacro MUI_STARTMENU_WRITE_BEGIN Application
     CreateDirectory "$SMPROGRAMS\$StartMenuFolder"
@@ -92,6 +93,7 @@ Section "SDK Version Manager" SecMain
 SectionEnd
 
 Section "Uninstall"
+  ExecWait '"$INSTDIR\bin\svm.exe" shell uninstall powershell'
   !insertmacro MUI_STARTMENU_GETFOLDER Application $StartMenuFolder
   Delete "$SMPROGRAMS\$StartMenuFolder\SDK Version Manager.lnk"
   Delete "$SMPROGRAMS\$StartMenuFolder\Uninstall SDK Version Manager.lnk"

@@ -198,7 +198,30 @@ for the next implementation stage. Tools normally supplied by a parent SDK or pr
 build system, such as Dart, Kotlin, Scala, and Groovy, and other lower-priority services
 remain in roadmap data but are hidden from the default catalog.
 
+## Download proxy
+
+`svm proxy` shows the current proxy. The setting applies to version-index and SDK download
+requests from both the GUI and CLI:
+
+```powershell
+svm proxy set http://127.0.0.1:7890
+svm proxy clear
+```
+
+Only HTTP proxies are currently supported; SOCKS5 is not supported. The proxy is stored locally.
+Proxy URLs cannot contain credentials, so secrets are not stored in plain text.
+Use `svm -v use java 17.0.19` to print the effective proxy, request URLs, HTTP status codes,
+and network errors.
+
 ## Project configuration
+
+PowerShell can run `svm env powershell` to generate an activation script for the current
+directory. The current PowerShell process must evaluate that output with `Invoke-Expression`
+to update PATH and provider-specific environment variables.
+The Windows installer installs the PowerShell directory hook automatically. In new terminals,
+the hook checks the current directory before each prompt, activates the nearest `.svmrc`, and
+restores the original environment after leaving the project. Source builds can install the same
+hook with `svm shell install powershell`.
 
 `svm init` performs the following actions in the current directory:
 

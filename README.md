@@ -185,7 +185,27 @@ SHA-256，并通过 `svm go ...` 为项目解析对应的 `GOROOT`。
 Scala、Groovy 等通常由上层 SDK 或项目构建系统提供的工具，以及其他低优先级服务，
 暂时保留在路线图数据中但不在默认目录展示。
 
+## 下载代理
+
+`svm proxy` 显示当前代理配置。代理对 GUI 和 CLI 发起的版本索引及 SDK 下载请求同时生效：
+
+```powershell
+svm proxy set http://127.0.0.1:7890
+svm proxy clear
+```
+
+当前仅支持 HTTP 代理，不支持 SOCKS5。代理配置只保存在本机。为避免明文保存秘密，
+代理 URL 不接受用户名或密码。
+使用 `svm -v use java 17.0.19` 可输出实际代理、请求 URL、HTTP 状态和网络错误，
+用于确认流量是否经过代理。
+
 ## 项目配置
+
+PowerShell 可执行 `svm env powershell` 生成当前目录的环境激活脚本。该输出需要由当前
+PowerShell 使用 `Invoke-Expression` 执行，才能修改当前终端的 PATH 和 Provider 环境变量。
+Windows 安装程序会自动安装 PowerShell 目录钩子。新开终端后，每次命令提示符显示前会
+检测当前目录：进入包含 `.svmrc` 的项目时自动激活，离开时自动恢复原环境。无需手动执行
+激活命令。源码构建可用 `svm shell install powershell` 安装同一钩子。
 
 `svm init` 会在当前目录中：
 

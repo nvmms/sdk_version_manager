@@ -27,6 +27,7 @@ class ProviderController final : public QObject
 public:
     explicit ProviderController(QObject *parent = nullptr);
     void startEventBus();
+    void setVerbose(bool verbose);
 
     QVariantList versions() const;
     bool busy() const;
@@ -63,6 +64,7 @@ signals:
     void defaultVersionsChanged();
     void downloadFinished(const QString &providerId, const QString &version, const QString &path);
     void downloadRemoved(const QString &providerId, const QString &version);
+    void diagnostic(const QString &message);
 
 private:
     void setBusy(bool busy);
@@ -135,4 +137,5 @@ private:
     bool m_makeDefaultAfterInstall = false;
     SvmEventBus *m_eventBus = nullptr;
     quint64 m_externalEventSerial = 0;
+    bool m_verbose = false;
 };
