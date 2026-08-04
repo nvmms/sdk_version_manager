@@ -217,9 +217,9 @@ svm proxy clear
 
 PowerShell 可执行 `svm env powershell` 生成当前目录的环境激活脚本。该输出需要由当前
 PowerShell 使用 `Invoke-Expression` 执行，才能修改当前终端的 PATH 和 Provider 环境变量。
-Windows 安装程序会自动安装 PowerShell 目录钩子。新开终端后，每次命令提示符显示前会
-检测当前目录：进入包含 `.svmrc` 的项目时自动激活，离开时自动恢复原环境。无需手动执行
-激活命令。源码构建可用 `svm shell install powershell` 安装同一钩子。
+Windows 安装程序会自动安装 PowerShell 环境钩子。新开终端后，每次命令提示符显示前会
+检测当前目录和最近的 `.svmrc`，因此在同一目录执行 `svm use` 后也会立即刷新环境；离开
+项目时自动恢复原环境。源码构建可用 `svm shell install powershell` 安装同一钩子。
 
 `svm init` 会在当前目录中：
 

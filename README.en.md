@@ -233,9 +233,10 @@ and network errors.
 PowerShell can run `svm env powershell` to generate an activation script for the current
 directory. The current PowerShell process must evaluate that output with `Invoke-Expression`
 to update PATH and provider-specific environment variables.
-The Windows installer installs the PowerShell directory hook automatically. In new terminals,
-the hook checks the current directory before each prompt, activates the nearest `.svmrc`, and
-restores the original environment after leaving the project. Source builds can install the same
+The Windows installer installs the PowerShell environment hook automatically. In new terminals,
+the hook checks the current directory and nearest `.svmrc` before each prompt, so running `svm use`
+also refreshes the environment without leaving the directory. It restores the original environment
+after leaving the project. Source builds can install the same
 hook with `svm shell install powershell`.
 
 `svm init` performs the following actions in the current directory:
