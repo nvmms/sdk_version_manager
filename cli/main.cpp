@@ -3,6 +3,7 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -82,6 +83,18 @@ bool writeProjectBinding(const QString &root, const QString &provider, const QSt
     return writeObject(path, config);
 }
 
+bool writeProjectBindings(const QString &root, const QJsonObject &bindings)
+{
+    const QString path = QDir(root).filePath(QStringLiteral(".svmrc"));
+    QJsonObject config = readObject(path);
+    QJsonObject sdks = config.value(QStringLiteral("sdks")).toObject();
+    for (auto it = bindings.constBegin(); it != bindings.constEnd(); ++it)
+        sdks.insert(it.key(), it.value());
+    config.insert(QStringLiteral("schemaVersion"), 1);
+    config.insert(QStringLiteral("sdks"), sdks);
+    return writeObject(path, config);
+}
+
 bool appendGitignoreEntry(const QString &path, const QByteArray &content)
 {
     QSaveFile file(path);
@@ -148,12 +161,69 @@ QString installedExecutable(const QString &provider, const QString &version)
         return root + QStringLiteral("/bin/go.exe");
     if (provider == QStringLiteral("postgresql"))
         return root + QStringLiteral("/bin/psql.exe");
+    if (provider == QStringLiteral("maven"))
+        return root + QStringLiteral("/bin/mvn.cmd");
     return {};
 }
 
 QString installedVersionDirectory(const QString &provider, const QString &version)
 {
     return QDir::cleanPath(dataRoot() + QStringLiteral("/installs/") + provider + u'/' + version);
+}
+
+struct ProviderEntryPoint
+{
+    QString provider;
+    QString relativeExecutable;
+    QStringList leadingArguments;
+    bool requiresCommandInterpreter = false;
+};
+
+bool providerEntryPoint(const QString &command, ProviderEntryPoint *entryPoint)
+{
+    static const QHash<QString, ProviderEntryPoint> entries{
+        {QStringLiteral("node"), {QStringLiteral("node"), QStringLiteral("node.exe"), {}}},
+        {QStringLiteral("npm"), {QStringLiteral("node"), QStringLiteral("node.exe"),
+                                  {QStringLiteral("node_modules/npm/bin/npm-cli.js")}}},
+        {QStringLiteral("npx"), {QStringLiteral("node"), QStringLiteral("node.exe"),
+                                  {QStringLiteral("node_modules/npm/bin/npx-cli.js")}}},
+        {QStringLiteral("corepack"), {QStringLiteral("node"), QStringLiteral("node.exe"),
+                                       {QStringLiteral("node_modules/corepack/dist/corepack.js")}}},
+        {QStringLiteral("flutter"), {QStringLiteral("flutter"), QStringLiteral("bin/flutter.bat"), {}, true}},
+        {QStringLiteral("dart"), {QStringLiteral("flutter"), QStringLiteral("bin/dart.bat"), {}, true}},
+        {QStringLiteral("java"), {QStringLiteral("java"), QStringLiteral("bin/java.exe"), {}}},
+        {QStringLiteral("javac"), {QStringLiteral("java"), QStringLiteral("bin/javac.exe"), {}}},
+        {QStringLiteral("jar"), {QStringLiteral("java"), QStringLiteral("bin/jar.exe"), {}}},
+        {QStringLiteral("javadoc"), {QStringLiteral("java"), QStringLiteral("bin/javadoc.exe"), {}}},
+        {QStringLiteral("jshell"), {QStringLiteral("java"), QStringLiteral("bin/jshell.exe"), {}}},
+        {QStringLiteral("keytool"), {QStringLiteral("java"), QStringLiteral("bin/keytool.exe"), {}}},
+        {QStringLiteral("python"), {QStringLiteral("python"), QStringLiteral("python.exe"), {}}},
+        {QStringLiteral("pip"), {QStringLiteral("python"), QStringLiteral("python.exe"),
+                                  {QStringLiteral("-m"), QStringLiteral("pip")}}},
+        {QStringLiteral("pip3"), {QStringLiteral("python"), QStringLiteral("python.exe"),
+                                   {QStringLiteral("-m"), QStringLiteral("pip")}}},
+        {QStringLiteral("php"), {QStringLiteral("php"), QStringLiteral("php.exe"), {}}},
+        {QStringLiteral("go"), {QStringLiteral("go"), QStringLiteral("bin/go.exe"), {}}},
+        {QStringLiteral("gofmt"), {QStringLiteral("go"), QStringLiteral("bin/gofmt.exe"), {}}},
+        {QStringLiteral("postgresql"), {QStringLiteral("postgresql"), QStringLiteral("bin/psql.exe"), {}}},
+        {QStringLiteral("psql"), {QStringLiteral("postgresql"), QStringLiteral("bin/psql.exe"), {}}},
+        {QStringLiteral("postgres"), {QStringLiteral("postgresql"), QStringLiteral("bin/postgres.exe"), {}}},
+        {QStringLiteral("pg_ctl"), {QStringLiteral("postgresql"), QStringLiteral("bin/pg_ctl.exe"), {}}},
+        {QStringLiteral("pg_dump"), {QStringLiteral("postgresql"), QStringLiteral("bin/pg_dump.exe"), {}}},
+        {QStringLiteral("pg_restore"), {QStringLiteral("postgresql"), QStringLiteral("bin/pg_restore.exe"), {}}},
+        {QStringLiteral("createdb"), {QStringLiteral("postgresql"), QStringLiteral("bin/createdb.exe"), {}}},
+        {QStringLiteral("dropdb"), {QStringLiteral("postgresql"), QStringLiteral("bin/dropdb.exe"), {}}},
+        {QStringLiteral("createuser"), {QStringLiteral("postgresql"), QStringLiteral("bin/createuser.exe"), {}}},
+        {QStringLiteral("dropuser"), {QStringLiteral("postgresql"), QStringLiteral("bin/dropuser.exe"), {}}},
+        {QStringLiteral("maven"), {QStringLiteral("maven"), QStringLiteral("bin/mvn.cmd"), {}, true}},
+        {QStringLiteral("mvn"), {QStringLiteral("maven"), QStringLiteral("bin/mvn.cmd"), {}, true}},
+        {QStringLiteral("mvndebug"), {QStringLiteral("maven"), QStringLiteral("bin/mvnDebug.cmd"), {}, true}},
+    };
+    const auto found = entries.constFind(command);
+    if (found == entries.cend())
+        return false;
+    *entryPoint = found.value();
+    return true;
 }
 
 std::filesystem::path filesystemPath(const QString &path)
@@ -453,7 +523,8 @@ bool downloadAndInstall(const QString &provider, const QString &version,
         : provider == QStringLiteral("python") ? QStringLiteral("Python")
         : provider == QStringLiteral("php") ? QStringLiteral("PHP")
         : provider == QStringLiteral("go") ? QStringLiteral("Go")
-                                            : QStringLiteral("PostgreSQL");
+        : provider == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
+                                               : QStringLiteral("PostgreSQL");
     int lastPercent = -1;
     const auto renderProgress = [&] {
         const int percent = qBound(0, qRound(controller.progress() * 100.0), 100);
@@ -506,6 +577,114 @@ bool downloadAndInstall(const QString &provider, const QString &version,
     out << " done." << Qt::endl;
     publish(QStringLiteral("done"), 1.0);
     return true;
+}
+
+int javaMajorVersion(const QString &version)
+{
+    const QString first = version.section(u'.', 0, 0);
+    if (first == QStringLiteral("1"))
+        return version.section(u'.', 1, 1).toInt();
+    return first.toInt();
+}
+
+int minimumJavaForMaven(const QString &mavenVersion)
+{
+    return mavenVersion.startsWith(QStringLiteral("4.")) ? 17 : 8;
+}
+
+bool isInstalledJavaCompatible(const QString &version, int minimumMajor)
+{
+    return javaMajorVersion(version) >= minimumMajor
+        && QFileInfo(installedExecutable(QStringLiteral("java"), version)).isFile();
+}
+
+QString mavenRuntimeJava(const QString &mavenVersion)
+{
+    return readObject(dataRoot() + QStringLiteral("/settings/runtime-dependencies.json"))
+        .value(QStringLiteral("maven")).toObject().value(mavenVersion).toObject()
+        .value(QStringLiteral("java")).toString();
+}
+
+bool saveMavenRuntimeJava(const QString &mavenVersion, const QString &javaVersion)
+{
+    const QString path = dataRoot() + QStringLiteral("/settings/runtime-dependencies.json");
+    QJsonObject root = readObject(path);
+    QJsonObject maven = root.value(QStringLiteral("maven")).toObject();
+    maven.insert(mavenVersion, QJsonObject{{QStringLiteral("java"), javaVersion},
+                                           {QStringLiteral("automatic"), true}});
+    root.insert(QStringLiteral("schemaVersion"), 1);
+    root.insert(QStringLiteral("maven"), maven);
+    return writeObject(path, root);
+}
+
+QString ensureMavenJava(const QString &mavenVersion)
+{
+    const int minimumMajor = minimumJavaForMaven(mavenVersion);
+    const QString projectRoot = findProjectRoot(QDir::currentPath());
+    if (!projectRoot.isEmpty()) {
+        const QString bound = readObject(projectConfigPath(projectRoot))
+                                  .value(QStringLiteral("sdks")).toObject()
+                                  .value(QStringLiteral("java")).toString();
+        if (!bound.isEmpty()) {
+            if (!isInstalledJavaCompatible(bound, minimumMajor)) {
+                err << "Project Java " << bound << " is not an installed compatible runtime for Maven "
+                    << mavenVersion << " (requires Java " << minimumMajor << "+)." << Qt::endl;
+                return {};
+            }
+            return bound;
+        }
+    }
+    const QString global = globalDefaultVersion(QStringLiteral("java"));
+    if (isInstalledJavaCompatible(global, minimumMajor))
+        return global;
+
+    QString selected;
+    QVersionNumber selectedNumber;
+    QDir installs(dataRoot() + QStringLiteral("/installs/java"));
+    for (const QString &candidate : installs.entryList(QDir::Dirs | QDir::NoDotAndDotDot)) {
+        if (!isInstalledJavaCompatible(candidate, minimumMajor))
+            continue;
+        const QVersionNumber number = QVersionNumber::fromString(candidate);
+        const bool candidateIsLts = QList<int>{8, 11, 17, 21}.contains(javaMajorVersion(candidate));
+        const bool selectedIsLts = QList<int>{8, 11, 17, 21}.contains(javaMajorVersion(selected));
+        if (selected.isEmpty() || (candidateIsLts && !selectedIsLts)
+            || (candidateIsLts == selectedIsLts
+                && QVersionNumber::compare(number, selectedNumber) > 0)) {
+            selected = candidate;
+            selectedNumber = number;
+        }
+    }
+    if (!selected.isEmpty())
+        return selected;
+
+    ProviderController controller;
+    controller.setVerbose(verboseOutput);
+    out << "No compatible managed Java is installed; resolving a recommended Java LTS..."
+        << Qt::endl;
+    controller.loadVersions(QStringLiteral("java"), false);
+    waitUntilIdle(controller);
+    QVersionNumber bestNumber;
+    for (const QVariant &value : controller.versions()) {
+        const QString candidate = value.toMap().value(QStringLiteral("version")).toString();
+        const int major = javaMajorVersion(candidate);
+        if (major != 21 || major < minimumMajor)
+            continue;
+        const QVersionNumber number = QVersionNumber::fromString(candidate);
+        if (selected.isEmpty() || QVersionNumber::compare(number, bestNumber) > 0) {
+            selected = candidate;
+            bestNumber = number;
+        }
+    }
+    if (selected.isEmpty()) {
+        err << "No recommended Java 21 LTS release is available for Maven "
+            << mavenVersion << '.' << Qt::endl;
+        return {};
+    }
+    out << "Maven " << mavenVersion << " requires Java " << minimumMajor
+        << "+; installing Java " << selected << " automatically." << Qt::endl;
+    if (!downloadAndInstall(QStringLiteral("java"), selected, false, verboseOutput))
+        return {};
+    return selected;
 }
 
 QString resolveVersion(const QString &provider, const QString &workingDirectory, QString *source)
@@ -830,6 +1009,12 @@ int commandUse(const QStringList &rawArguments)
 
     const QString provider = arguments[0].toLower();
     const QString version = arguments[1];
+    QString dependencyJava;
+    if (provider == QStringLiteral("maven")) {
+        dependencyJava = ensureMavenJava(version);
+        if (dependencyJava.isEmpty())
+            return 3;
+    }
     const QString executable = installedExecutable(provider, version);
     if (executable.isEmpty()) {
         err << "Unsupported provider: " << provider << Qt::endl;
@@ -850,7 +1035,10 @@ int commandUse(const QStringList &rawArguments)
         return 1;
     }
 
-    if (!writeProjectBinding(root, provider, version)) {
+    QJsonObject bindings{{provider, version}};
+    if (!dependencyJava.isEmpty())
+        bindings.insert(QStringLiteral("java"), dependencyJava);
+    if (!writeProjectBindings(root, bindings)) {
         err << "Failed to update " << projectConfigPath(root) << Qt::endl;
         return 1;
     }
@@ -863,9 +1051,22 @@ int commandUse(const QStringList &rawArguments)
             << installedVersionDirectory(provider, version) << Qt::endl;
         return 1;
     }
+    if (!dependencyJava.isEmpty()
+        && !syncProjectSdkMapping(root, QStringLiteral("java"), dependencyJava, &mappingError)) {
+        err << "Updated " << projectConfigPath(root)
+            << ", but failed to create the Java dependency mapping: " << mappingError << Qt::endl;
+        return 1;
+    }
+    if (!dependencyJava.isEmpty()
+        && !saveMavenRuntimeJava(version, dependencyJava)) {
+        err << "Failed to record the Maven runtime dependency." << Qt::endl;
+        return 1;
+    }
     const QJsonObject sdks = readObject(projectConfigPath(root))
                                   .value(QStringLiteral("sdks")).toObject();
     out << provider << ' ' << version << " is now active for " << root << Qt::endl;
+    if (!dependencyJava.isEmpty())
+        out << "  runtime dependency: Java " << dependencyJava << Qt::endl;
     printIdeConfigurationHints(root, sdks);
     return 0;
 }
@@ -1200,6 +1401,26 @@ QVariantList cachedVersions(const QString &provider)
             item.insert(QStringLiteral("date"), QStringLiteral("—"));
             result.append(item);
         }
+    } else if (provider == QStringLiteral("maven")) {
+        const QString html = QString::fromUtf8(data);
+        static const QRegularExpression pattern(
+            QStringLiteral(R"(>(3\.(?:8|9|10)\.\d+|4\.0\.0-(?:alpha|beta|rc)-\d+)<)"),
+            QRegularExpression::CaseInsensitiveOption);
+        QSet<QString> seen;
+        QRegularExpressionMatchIterator matches = pattern.globalMatch(html);
+        while (matches.hasNext()) {
+            const QString version = matches.next().captured(1).toLower();
+            if (seen.contains(version))
+                continue;
+            seen.insert(version);
+            QVariantMap item;
+            item.insert(QStringLiteral("version"), version);
+            item.insert(QStringLiteral("channel"),
+                        version.startsWith(QStringLiteral("4."))
+                            ? QStringLiteral("preview") : QStringLiteral("stable"));
+            item.insert(QStringLiteral("date"), QStringLiteral("—"));
+            result.append(item);
+        }
     } else if (provider == QStringLiteral("postgresql")) {
         for (const QJsonValue &value : document.array()) {
             const QJsonObject release = value.toObject();
@@ -1239,7 +1460,7 @@ int commandList(const QStringList &arguments)
     static const QStringList providers{QStringLiteral("node"), QStringLiteral("flutter"),
                                        QStringLiteral("java"), QStringLiteral("python"),
                                        QStringLiteral("php"), QStringLiteral("go"),
-                                       QStringLiteral("postgresql")};
+                                       QStringLiteral("postgresql"), QStringLiteral("maven")};
     if (arguments.isEmpty()) {
         const QJsonObject defaults =
             readObject(dataRoot() + QStringLiteral("/settings/default-versions.json"))
@@ -1272,10 +1493,11 @@ int commandList(const QStringList &arguments)
                               QStringLiteral("current"), QStringLiteral("stable"),
                               QStringLiteral("beta"), QStringLiteral("nts"),
                               QStringLiteral("ts"), QStringLiteral("legacy"),
+                              QStringLiteral("preview"),
                               QStringLiteral("downloaded")};
     if (!filters.contains(filter)) {
         err << "Unknown filter: " << filter
-            << ". Use all, lts, current, stable, beta, nts, ts, legacy, or downloaded."
+            << ". Use all, lts, current, stable, beta, preview, nts, ts, legacy, or downloaded."
             << Qt::endl;
         return 2;
     }
@@ -1305,6 +1527,7 @@ int commandList(const QStringList &arguments)
                 && normalizedChannel.contains(QStringLiteral("current")))
             || (filter == QStringLiteral("stable") && normalizedChannel == QStringLiteral("stable"))
             || (filter == QStringLiteral("beta") && normalizedChannel == QStringLiteral("beta"))
+            || (filter == QStringLiteral("preview") && normalizedChannel == QStringLiteral("preview"))
             || (filter == QStringLiteral("legacy")
                 && normalizedChannel == QStringLiteral("legacy"))
             || (filter == QStringLiteral("nts") && buildType == QStringLiteral("nts"))
@@ -1358,6 +1581,39 @@ int commandProxy(const QStringList &arguments)
     }
     err << "Usage: svm proxy [show|set <http-url>|clear]" << Qt::endl;
     return 2;
+}
+
+int commandInstall(const QStringList &arguments)
+{
+    if (arguments.size() != 2 || !validToken(arguments[0]) || !validToken(arguments[1])) {
+        err << "Usage: svm install <provider> <version>" << Qt::endl;
+        return 2;
+    }
+    const QString provider = arguments[0].toLower();
+    const QString version = arguments[1];
+    if (installedExecutable(provider, version).isEmpty()) {
+        err << "Unsupported provider: " << provider << Qt::endl;
+        return 2;
+    }
+    QString javaVersion;
+    if (provider == QStringLiteral("maven")) {
+        javaVersion = ensureMavenJava(version);
+        if (javaVersion.isEmpty())
+            return 3;
+    }
+    if (!QFileInfo(installedExecutable(provider, version)).isFile()
+        && !downloadAndInstall(provider, version, false, verboseOutput))
+        return 3;
+    if (!javaVersion.isEmpty()) {
+        if (!saveMavenRuntimeJava(version, javaVersion)) {
+            err << "Maven was installed, but its Java runtime association could not be saved."
+                << Qt::endl;
+            return 1;
+        }
+        out << "Configured Maven " << version << " to run with Java " << javaVersion << '.'
+            << Qt::endl;
+    }
+    return 0;
 }
 
 QString quotePowerShell(const QString &value)
@@ -1558,8 +1814,9 @@ QString quoteForCmd(const QString &argument)
     return u'"' + escaped + u'"';
 }
 
-int proxyCommand(const QString &provider, const QStringList &arguments)
+int proxyCommand(const ProviderEntryPoint &entryPoint, const QStringList &arguments)
 {
+    const QString provider = entryPoint.provider;
     QString source;
     const QString version = resolveVersion(provider, QDir::currentPath(), &source);
     if (version.isEmpty()) {
@@ -1567,7 +1824,8 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
             << " <version>` or set a global default in the GUI." << Qt::endl;
         return 3;
     }
-    const QString executable = installedExecutable(provider, version);
+    const QString executable = QDir(installedVersionDirectory(provider, version))
+                                   .filePath(entryPoint.relativeExecutable);
     if (!QFileInfo(executable).isFile()) {
         err << provider << ' ' << version << " is configured but not installed: "
             << executable << Qt::endl;
@@ -1582,6 +1840,30 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
     QStringList sdkPaths{QDir::toNativeSeparators(sdkBin)};
     if (provider == QStringLiteral("python"))
         sdkPaths.append(QDir::toNativeSeparators(sdkBin + QStringLiteral("/Scripts")));
+    if (provider == QStringLiteral("maven")) {
+        QString javaVersion;
+        const QString projectRoot = findProjectRoot(QDir::currentPath());
+        if (!projectRoot.isEmpty()) {
+            javaVersion = readObject(projectConfigPath(projectRoot))
+                              .value(QStringLiteral("sdks")).toObject()
+                              .value(QStringLiteral("java")).toString();
+        }
+        if (javaVersion.isEmpty())
+            javaVersion = mavenRuntimeJava(version);
+        if (javaVersion.isEmpty())
+            javaVersion = resolveVersion(QStringLiteral("java"), QDir::currentPath(), nullptr);
+        if (!isInstalledJavaCompatible(javaVersion, minimumJavaForMaven(version))) {
+            err << "Maven " << version << " requires an installed Java "
+                << minimumJavaForMaven(version) << "+ runtime. Run `svm use maven "
+                << version << "` to resolve it automatically." << Qt::endl;
+            return 3;
+        }
+        const QString javaHome = installedVersionDirectory(QStringLiteral("java"), javaVersion);
+        sdkPaths.append(QDir::toNativeSeparators(javaHome + QStringLiteral("/bin")));
+        environment.insert(QStringLiteral("JAVA_HOME"), QDir::toNativeSeparators(javaHome));
+        environment.insert(QStringLiteral("MAVEN_HOME"),
+                           QDir::toNativeSeparators(installedVersionDirectory(provider, version)));
+    }
     environment.insert(QStringLiteral("PATH"),
                        sdkPaths.join(u';') + u';'
                            + environment.value(QStringLiteral("PATH")));
@@ -1600,19 +1882,25 @@ int proxyCommand(const QString &provider, const QStringList &arguments)
         process.setProcessEnvironment(environment);
     }
 
-    if (provider == QStringLiteral("node") || provider == QStringLiteral("java")
-        || provider == QStringLiteral("python") || provider == QStringLiteral("php")
-        || provider == QStringLiteral("go") || provider == QStringLiteral("postgresql")) {
-        process.start(executable, arguments);
+    QStringList processArguments;
+    for (const QString &leadingArgument : entryPoint.leadingArguments) {
+        const QString candidate = QDir(installedVersionDirectory(provider, version))
+                                      .filePath(leadingArgument);
+        processArguments.append(QFileInfo(candidate).isFile() ? candidate : leadingArgument);
+    }
+    processArguments.append(arguments);
+
+    if (!entryPoint.requiresCommandInterpreter) {
+        process.start(executable, processArguments);
     } else {
-        for (const QString &argument : arguments) {
+        for (const QString &argument : processArguments) {
             if (argument.contains(QRegularExpression(QStringLiteral(R"([%!\^&|<>()])")))) {
-                err << "Unsafe shell metacharacter in Flutter argument." << Qt::endl;
+                err << "Unsafe shell metacharacter in batch-file argument." << Qt::endl;
                 return 2;
             }
         }
         QString command = quoteForCmd(QDir::toNativeSeparators(executable));
-        for (const QString &argument : arguments)
+        for (const QString &argument : processArguments)
             command += u' ' + quoteForCmd(argument);
 #ifdef Q_OS_WIN
         process.setProgram(QStringLiteral("cmd.exe"));
@@ -1638,6 +1926,7 @@ void printHelp()
            "Usage:\n"
            "  svm -v <command> [arguments...]\n"
            "  svm init\n"
+           "  svm install <provider> <version>\n"
            "  svm use [provider [version]]\n"
            "  svm use php <legacy-version> --allow-unverified-archive\n"
            "  svm ide [vscode|idea|android-studio]\n"
@@ -1645,14 +1934,17 @@ void printHelp()
            "  svm proxy [show|set <http-url>|clear]\n"
            "  svm env powershell\n"
            "  svm shell <install|uninstall> powershell\n"
-           "  svm <provider> [arguments...]\n\n"
+           "  svm <provider|entry-point> [arguments...]\n\n"
            "Examples:\n"
            "  svm -v use java 17.0.19\n"
            "  svm use node 24.18.0\n"
+           "  svm install maven 3.9.16\n"
            "  svm ide vscode\n"
            "  svm list lts node\n"
            "  svm proxy set http://127.0.0.1:7890\n"
            "  svm node --version\n"
+           "  svm npm --version\n"
+           "  svm npx --version\n"
            "  svm java --version\n"
            "  svm python --version\n"
            "  svm php --version\n"
@@ -1685,6 +1977,8 @@ int main(int argc, char *argv[])
     const QString command = arguments.takeFirst().toLower();
     if (command == QStringLiteral("init"))
         return commandInit(arguments);
+    if (command == QStringLiteral("install"))
+        return commandInstall(arguments);
     if (command == QStringLiteral("use"))
         return commandUse(arguments);
     if (command == QStringLiteral("ide"))
@@ -1697,11 +1991,9 @@ int main(int argc, char *argv[])
         return commandEnvironment(arguments);
     if (command == QStringLiteral("shell"))
         return commandShell(arguments);
-    if (command == QStringLiteral("node") || command == QStringLiteral("flutter")
-        || command == QStringLiteral("java") || command == QStringLiteral("python")
-        || command == QStringLiteral("php") || command == QStringLiteral("go")
-        || command == QStringLiteral("postgresql"))
-        return proxyCommand(command, arguments);
+    ProviderEntryPoint entryPoint;
+    if (providerEntryPoint(command, &entryPoint))
+        return proxyCommand(entryPoint, arguments);
 
     err << "Unknown command or provider: " << command << Qt::endl;
     printHelp();

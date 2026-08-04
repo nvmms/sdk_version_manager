@@ -33,7 +33,7 @@ var sections = [
 // 下载中心默认只展示已实现 Provider 和下一阶段明确要打通的 Provider。
 // 其他条目继续保留在路线图数据中，等高级工具目录或依赖关系模型成熟后再开放。
 var defaultVisibleProviderKeys = [
-    "flutter", "java", "python", "node",
+    "flutter", "java", "python", "node", "maven",
     "php", "go", "ruby", "dotnet",
     "nginx", "apache-httpd",
     "mysql", "postgresql", "mongodb", "redis"
@@ -55,6 +55,7 @@ var providers = [
         version("17.0.16", "LTS", "187 MB"),
         version("11.0.28", "LTS", "181 MB")
     ]),
+    provider("maven", "sdk", "Apache Maven", "Java 项目构建与依赖管理", "M", "#c65d46", true),
     provider("kotlin", "sdk", "Kotlin", "Kotlin 编译器", "K", "#a98bff"),
     provider("scala", "sdk", "Scala", "Scala 工具链", "Sc", "#ef6a67"),
     provider("groovy", "sdk", "Groovy", "JVM 动态语言", "Gr", "#69b9d1"),

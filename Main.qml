@@ -47,7 +47,7 @@ ApplicationWindow {
         return providerKey === "flutter" || providerKey === "node"
                 || providerKey === "java" || providerKey === "python"
                 || providerKey === "php" || providerKey === "go"
-                || providerKey === "postgresql"
+                || providerKey === "postgresql" || providerKey === "maven"
     }
 
     function filterProviders(source, query) {

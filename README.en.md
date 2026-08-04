@@ -86,8 +86,16 @@ svm list lts node
 svm list stable flutter
 svm list downloaded node
 
+# Install Maven and automatically resolve or install a compatible Java runtime
+svm install maven 3.9.16
+svm use maven 3.9.16
+svm mvn --version
+
 # Run native commands with the project-selected SDK
 svm node --version
+svm npm --version
+svm javac -version
+svm pip --version
 svm node app.js
 svm flutter doctor
 ```
@@ -159,7 +167,7 @@ running IDE might require a window reload or restart after changing the setting.
 3. The global default;
 4. The latest installed version.
 
-The currently supported CLI provider IDs are `node`, `flutter`, `java`, `python`, `php`, and `go`. The Java
+The currently supported CLI provider IDs include `node`, `flutter`, `java`, `python`, `php`, `go`, `postgresql`, and `maven`. The Java
 provider reads Windows x64 Temurin JDK ZIP releases from the official Eclipse Adoptium
 API and verifies the official SHA-256 before installation.
 The Python provider reads Windows x64 installers from the official python.org API and
@@ -178,6 +186,13 @@ The Go provider uses the complete official go.dev release index and Windows amd6
 archives, verifies the official SHA-256, and resolves the matching `GOROOT` for
 `svm go ...`.
 
+The Maven provider reads Apache's official release history and archive ZIPs and verifies
+the official SHA-512 before installation. `svm install maven <version>` first reuses a
+compatible project-bound, global-default, or installed Java runtime; if none exists, it
+automatically installs Java 21 LTS. `svm use maven <version>` records both resolved versions
+in `.svmrc`, while `svm mvn ...` sets `JAVA_HOME`, `MAVEN_HOME`, and `PATH` only for the
+child process.
+
 ## Available today
 
 - Browse, refresh, and filter Node.js and Flutter releases in the GUI;
@@ -186,7 +201,7 @@ archives, verifies the official SHA-256, and resolves the matching `GOROOT` for
 - Set global default SDK versions;
 - Bind multiple SDK versions to a project through `.svmrc`;
 - Find the nearest `.svmrc` by walking up from the current directory;
-- Run the selected SDK through `svm node ...`, `svm flutter ...`, `svm java ...`, `svm python ...`, `svm php ...`, or `svm go ...`;
+- Run the selected SDK through either its provider or tool entry point, such as `svm node ...`, `svm npm ...`, `svm dart ...`, `svm javac ...`, `svm pip ...`, `svm mvn ...`, `svm gofmt ...`, or `svm psql ...`;
 - Print project SDK setup guidance for common IDEs from `svm use` without writing
   IDE-specific files;
 - Explicitly merge Flutter, Python, and Java settings with `svm ide vscode`;

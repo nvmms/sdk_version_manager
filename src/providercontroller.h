@@ -73,7 +73,9 @@ private:
     void setError(const QString &error);
     void fail(const QString &message);
     void fetchNodeChecksum();
+    void fetchMavenChecksum();
     void verifyNodeDownload(const QByteArray &checksumDocument);
+    void verifyMavenDownload(const QByteArray &checksumDocument);
     void verifyDownloadedFile(const QByteArray &expectedHash);
     void verifyPythonDownload();
     void recordUnverifiedDownload();
@@ -84,9 +86,12 @@ private:
     bool applyPhpIndex(const QByteArray &data);
     bool applyGoIndex(const QByteArray &data);
     bool applyPostgresqlIndex(const QByteArray &data);
+    bool applyMavenIndex(const QByteArray &data);
     void fetchJavaIndexes();
     void fetchPhpIndexes();
     void installPostgresql(const QString &version);
+    void installMaven(const QString &version);
+    bool activateMaven(const QString &version);
     bool activatePostgresql(const QString &version);
     QString cachePath(const QString &providerId) const;
     QString downloadDirectory(const QString &providerId, const QString &version) const;

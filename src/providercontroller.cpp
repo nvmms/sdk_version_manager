@@ -42,6 +42,8 @@ constexpr auto phpArchiveUrl = "https://windows.php.net/downloads/releases/archi
 constexpr auto goIndexUrl = "https://go.dev/dl/?mode=json&include=all";
 constexpr auto postgresqlIndexUrl =
     "https://www.postgresql.org/versions.json";
+constexpr auto mavenIndexUrl = "https://maven.apache.org/docs/history.html";
+constexpr auto mavenArchiveBase = "https://archive.apache.org/dist/maven/";
 constexpr auto goDistBase = "https://go.dev/dl/";
 }
 
@@ -156,7 +158,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
         && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")
-        && providerId != QStringLiteral("postgresql")) {
+        && providerId != QStringLiteral("postgresql")
+        && providerId != QStringLiteral("maven")) {
         setError(tr("%1 Provider 尚未接入官方版本源").arg(providerId));
         return;
     }
@@ -190,7 +193,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                 : providerId == QStringLiteral("python") ? applyPythonIndex(data)
                 : providerId == QStringLiteral("php") ? applyPhpIndex(data)
                 : providerId == QStringLiteral("go") ? applyGoIndex(data)
-                                                     : applyPostgresqlIndex(data);
+                : providerId == QStringLiteral("maven") ? applyMavenIndex(data)
+                                                        : applyPostgresqlIndex(data);
             if (applied && phpCacheHasArchives) {
                 if (m_verbose)
                     emit diagnostic(QStringLiteral("version index: local cache %1")
@@ -202,7 +206,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                     : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                     : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                     : providerId == QStringLiteral("go") ? QStringLiteral("Go")
-                                                         : QStringLiteral("PostgreSQL")));
+                    : providerId == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
+                                                            : QStringLiteral("PostgreSQL")));
                 return;
             }
         }
@@ -216,7 +221,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
         : providerId == QStringLiteral("python") ? QStringLiteral("Python")
         : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
         : providerId == QStringLiteral("go") ? QStringLiteral("Go")
-                                             : QStringLiteral("PostgreSQL");
+        : providerId == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
+                                                : QStringLiteral("PostgreSQL");
     setStatus(tr("正在从 %1 官方源获取版本…").arg(displayName));
     setProgress(0.0);
     setBusy(true);
@@ -236,6 +242,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
                             ? QString::fromLatin1(pythonIndexUrl)
                         : providerId == QStringLiteral("php")
                             ? QString::fromLatin1(phpIndexUrl)
+                        : providerId == QStringLiteral("maven")
+                            ? QString::fromLatin1(mavenIndexUrl)
                         : providerId == QStringLiteral("postgresql")
                             ? QString::fromLatin1(postgresqlIndexUrl)
                             : QString::fromLatin1(goIndexUrl));
@@ -268,7 +276,8 @@ void ProviderController::loadVersions(const QString &providerId, bool forceRefre
             : providerId == QStringLiteral("python") ? applyPythonIndex(data)
             : providerId == QStringLiteral("php") ? applyPhpIndex(data)
             : providerId == QStringLiteral("go") ? applyGoIndex(data)
-                                                 : applyPostgresqlIndex(data);
+            : providerId == QStringLiteral("maven") ? applyMavenIndex(data)
+                                                    : applyPostgresqlIndex(data);
         if (!applied) {
             fail(tr("%1 版本索引格式无效").arg(displayName));
             return;
@@ -813,6 +822,47 @@ bool ProviderController::applyPostgresqlIndex(const QByteArray &data)
     return true;
 }
 
+bool ProviderController::applyMavenIndex(const QByteArray &data)
+{
+    const QString html = QString::fromUtf8(data);
+    static const QRegularExpression versionPattern(
+        QStringLiteral(R"(>(3\.(?:8|9|10)\.\d+|4\.0\.0-(?:alpha|beta|rc)-\d+)<)"),
+        QRegularExpression::CaseInsensitiveOption);
+    QSet<QString> seen;
+    QVariantList versions;
+    bool recommendedAssigned = false;
+    QRegularExpressionMatchIterator matches = versionPattern.globalMatch(html);
+    while (matches.hasNext()) {
+        const QString version = matches.next().captured(1).toLower();
+        if (seen.contains(version))
+            continue;
+        seen.insert(version);
+        const bool preview = version.startsWith(QStringLiteral("4."));
+        const QString series = preview ? QStringLiteral("maven-4") : QStringLiteral("maven-3");
+        const QString fileName = QStringLiteral("apache-maven-%1-bin.zip").arg(version);
+        QVariantMap item;
+        item.insert(QStringLiteral("version"), version);
+        item.insert(QStringLiteral("channel"), preview ? QStringLiteral("preview")
+                                                        : QStringLiteral("stable"));
+        item.insert(QStringLiteral("released"), QStringLiteral("—"));
+        item.insert(QStringLiteral("size"), QStringLiteral("—"));
+        item.insert(QStringLiteral("recommended"), !preview && !recommendedAssigned);
+        item.insert(QStringLiteral("minimumJava"), preview ? 17 : 8);
+        item.insert(QStringLiteral("downloadUrl"),
+                    QString::fromLatin1(mavenArchiveBase) + series + u'/' + version
+                        + QStringLiteral("/binaries/") + fileName);
+        item.insert(QStringLiteral("verification"), QStringLiteral("remote-sha512"));
+        versions.append(item);
+        if (!preview)
+            recommendedAssigned = true;
+    }
+    if (versions.isEmpty())
+        return false;
+    m_versions = versions;
+    emit versionsChanged();
+    return true;
+}
+
 QString ProviderController::cachePath(const QString &providerId) const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
@@ -836,7 +886,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
     if (providerId != QStringLiteral("node") && providerId != QStringLiteral("flutter")
         && providerId != QStringLiteral("java") && providerId != QStringLiteral("python")
         && providerId != QStringLiteral("php") && providerId != QStringLiteral("go")
-        && providerId != QStringLiteral("postgresql")) {
+        && providerId != QStringLiteral("postgresql")
+        && providerId != QStringLiteral("maven")) {
         setError(tr("Provider %1 尚未接入真实下载").arg(providerId));
         return;
     }
@@ -887,6 +938,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
         const bool validVerification = m_expectedHash.size() == 64
             || (providerId == QStringLiteral("python")
                 && verification == QStringLiteral("authenticode"))
+            || (providerId == QStringLiteral("maven")
+                && verification == QStringLiteral("remote-sha512"))
             || ((providerId == QStringLiteral("php")
                  || providerId == QStringLiteral("postgresql"))
                 && verification == QStringLiteral("unverified") && allowUnverified);
@@ -907,6 +960,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
                               : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                               : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                               : providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                              : providerId == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
                               : providerId == QStringLiteral("postgresql")
                                   ? QStringLiteral("PostgreSQL")
                                   : QStringLiteral("Flutter"),
@@ -934,6 +988,7 @@ void ProviderController::download(const QString &providerId, const QString &vers
                        : providerId == QStringLiteral("python") ? QStringLiteral("Python")
                        : providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                        : providerId == QStringLiteral("go") ? QStringLiteral("Go")
+                       : providerId == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
                                                             : QStringLiteral("PostgreSQL"),
                        version));
     setBusy(true);
@@ -992,6 +1047,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
             reply->deleteLater();
             if (m_providerId == QStringLiteral("node"))
                 fetchNodeChecksum();
+            else if (m_providerId == QStringLiteral("maven"))
+                fetchMavenChecksum();
             else if (m_verificationMode == QStringLiteral("unverified"))
                 recordUnverifiedDownload();
             else
@@ -1007,6 +1064,8 @@ void ProviderController::download(const QString &providerId, const QString &vers
         reply->deleteLater();
         if (m_providerId == QStringLiteral("node"))
             fetchNodeChecksum();
+        else if (m_providerId == QStringLiteral("maven"))
+            fetchMavenChecksum();
         else if (m_providerId == QStringLiteral("python") && m_expectedHash.isEmpty())
             verifyPythonDownload();
         else if (m_verificationMode == QStringLiteral("unverified"))
@@ -1126,6 +1185,10 @@ void ProviderController::installDownloaded(const QString &providerId, const QStr
     }
     if (providerId == QStringLiteral("postgresql")) {
         installPostgresql(version);
+        return;
+    }
+    if (providerId == QStringLiteral("maven")) {
+        installMaven(version);
         return;
     }
     if (providerId != QStringLiteral("node")) {
@@ -1267,6 +1330,52 @@ void ProviderController::verifyNodeDownload(const QByteArray &checksumDocument)
     verifyDownloadedFile(expectedHash);
 }
 
+void ProviderController::fetchMavenChecksum()
+{
+    setStatus(tr("正在获取 Apache 官方 SHA-512 校验值…"));
+    QUrl checksumUrl;
+    for (const QVariant &entry : std::as_const(m_versions)) {
+        const QVariantMap release = entry.toMap();
+        if (release.value(QStringLiteral("version")).toString() == m_version) {
+            checksumUrl = QUrl(release.value(QStringLiteral("downloadUrl")).toString()
+                               + QStringLiteral(".sha512"));
+            break;
+        }
+    }
+    if (!checksumUrl.isValid()) {
+        QFile::remove(m_downloadFile.fileName());
+        fail(tr("找不到 Maven 官方 SHA-512 校验地址"));
+        return;
+    }
+    m_reply = m_network.get(QNetworkRequest(checksumUrl));
+    connect(m_reply, &QNetworkReply::finished, this, [this] {
+        QNetworkReply *reply = m_reply;
+        m_reply = nullptr;
+        if (reply->error() != QNetworkReply::NoError) {
+            const QString message = reply->errorString();
+            reply->deleteLater();
+            QFile::remove(m_downloadFile.fileName());
+            fail(tr("获取 Maven SHA-512 校验值失败：%1").arg(message));
+            return;
+        }
+        const QByteArray document = reply->readAll();
+        reply->deleteLater();
+        verifyMavenDownload(document);
+    });
+}
+
+void ProviderController::verifyMavenDownload(const QByteArray &checksumDocument)
+{
+    const QByteArray expectedHash = checksumDocument.trimmed().left(128).toLower();
+    static const QRegularExpression hashPattern(QStringLiteral("^[0-9a-f]{128}$"));
+    if (!hashPattern.match(QString::fromLatin1(expectedHash)).hasMatch()) {
+        QFile::remove(m_downloadFile.fileName());
+        fail(tr("Maven 官方 SHA-512 校验值格式无效"));
+        return;
+    }
+    verifyDownloadedFile(expectedHash);
+}
+
 void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
 {
     QFile file(m_downloadFile.fileName());
@@ -1274,7 +1383,9 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
         fail(tr("无法读取下载文件进行校验"));
         return;
     }
-    QCryptographicHash hash(QCryptographicHash::Sha256);
+    const bool sha512 = expectedHash.size() == 128;
+    QCryptographicHash hash(sha512 ? QCryptographicHash::Sha512
+                                  : QCryptographicHash::Sha256);
     if (!hash.addData(&file)) {
         file.close();
         fail(tr("无法计算下载文件的 SHA-256"));
@@ -1299,13 +1410,15 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
     manifestObject.insert(QStringLiteral("provider"), m_providerId);
     manifestObject.insert(QStringLiteral("version"), m_version);
     manifestObject.insert(QStringLiteral("file"), QFileInfo(m_downloadPath).fileName());
-    manifestObject.insert(QStringLiteral("sha256"), QString::fromLatin1(expectedHash));
+    manifestObject.insert(sha512 ? QStringLiteral("sha512") : QStringLiteral("sha256"),
+                          QString::fromLatin1(expectedHash));
     manifestObject.insert(QStringLiteral("verification"),
                           m_verificationMode == QStringLiteral("unverified")
                               ? QStringLiteral("local-integrity-only")
                           : m_verificationMode == QStringLiteral("authenticode")
                               ? QStringLiteral("authenticode")
-                              : QStringLiteral("official-sha256"));
+                               : sha512 ? QStringLiteral("official-sha512")
+                                        : QStringLiteral("official-sha256"));
     QSaveFile manifest(downloadManifestPath(m_providerId, m_version));
     if (manifest.open(QIODevice::WriteOnly)) {
         manifest.write(QJsonDocument(manifestObject).toJson(QJsonDocument::Indented));
@@ -1320,7 +1433,8 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
                        : m_providerId == QStringLiteral("python") ? QStringLiteral("Python")
                        : m_providerId == QStringLiteral("php") ? QStringLiteral("PHP")
                        : m_providerId == QStringLiteral("go") ? QStringLiteral("Go")
-                                                              : QStringLiteral("PostgreSQL"),
+                       : m_providerId == QStringLiteral("maven") ? QStringLiteral("Apache Maven")
+                                                                : QStringLiteral("PostgreSQL"),
                        m_version));
     setBusy(false);
     emit downloadFinished(m_providerId, m_version, m_downloadPath);
@@ -1414,6 +1528,109 @@ QString ProviderController::shimDirectory() const
 {
     return QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation)
         + QStringLiteral("/bin");
+}
+
+void ProviderController::installMaven(const QString &version)
+{
+    const QString destination = installDirectory(QStringLiteral("maven"), version);
+    if (QFileInfo(destination + QStringLiteral("/bin/mvn.cmd")).isFile()) {
+        if (m_makeDefaultAfterInstall && !activateMaven(version))
+            setError(tr("无法激活 Apache Maven %1").arg(version));
+        return;
+    }
+    if (m_busy) {
+        setError(tr("已有任务正在执行"));
+        return;
+    }
+    QFile manifest(downloadManifestPath(QStringLiteral("maven"), version));
+    if (!manifest.open(QIODevice::ReadOnly)) {
+        setError(tr("Maven %1 下载记录不存在").arg(version));
+        return;
+    }
+    const QString fileName = QJsonDocument::fromJson(manifest.readAll())
+                                 .object().value(QStringLiteral("file")).toString();
+    const QString archive = downloadDirectory(QStringLiteral("maven"), version) + u'/' + fileName;
+    if (fileName.isEmpty() || !QFileInfo(archive).isFile()) {
+        setError(tr("Maven %1 下载文件不存在").arg(version));
+        return;
+    }
+    const QString installsRoot = QFileInfo(destination).absolutePath();
+    m_pendingStagingPath = installsRoot + QStringLiteral("/.extracting-") + version;
+    QDir staging(m_pendingStagingPath);
+    if ((staging.exists() && !staging.removeRecursively())
+        || !QDir().mkpath(m_pendingStagingPath)) {
+        setError(tr("无法创建 Maven 安装暂存目录"));
+        return;
+    }
+    m_pendingInstallVersion = version;
+    m_providerId = QStringLiteral("maven");
+    m_version = version;
+    emit activeProviderChanged();
+    emit activeVersionChanged();
+    setError({});
+    setProgress(0.0);
+    setStatus(tr("正在解压并安装 Maven %1…").arg(version));
+    setBusy(true);
+    m_installProcess.disconnect(this);
+    connect(&m_installProcess, &QProcess::errorOccurred, this,
+            [this](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            QDir(m_pendingStagingPath).removeRecursively();
+            fail(tr("无法启动系统解压工具 tar.exe"));
+        }
+    });
+    connect(&m_installProcess, qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
+            [this](int exitCode, QProcess::ExitStatus exitStatus) {
+        if (!m_busy)
+            return;
+        QDir staging(m_pendingStagingPath);
+        const QStringList roots = staging.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        if (exitStatus != QProcess::NormalExit || exitCode != 0 || roots.size() != 1
+            || !QFileInfo(staging.filePath(roots.first() + QStringLiteral("/bin/mvn.cmd"))).isFile()) {
+            const QString details = QString::fromLocal8Bit(
+                m_installProcess.readAllStandardError()).trimmed();
+            staging.removeRecursively();
+            fail(tr("解压 Maven 失败：%1").arg(details));
+            return;
+        }
+        const QString destination =
+            installDirectory(QStringLiteral("maven"), m_pendingInstallVersion);
+        if (QFileInfo(destination).exists()
+            || !QDir().rename(staging.filePath(roots.first()), destination)) {
+            staging.removeRecursively();
+            fail(tr("无法完成 Maven 安装目录切换"));
+            return;
+        }
+        staging.removeRecursively();
+        if (m_makeDefaultAfterInstall && !activateMaven(m_pendingInstallVersion)) {
+            fail(tr("Maven 已解压，但写入系统 PATH 失败"));
+            return;
+        }
+        setStatus(tr("Maven %1 安装完成").arg(m_pendingInstallVersion));
+        setProgress(1.0);
+        setBusy(false);
+    });
+    m_installProcess.start(QStringLiteral("tar.exe"),
+                           {QStringLiteral("-xf"), archive, QStringLiteral("-C"),
+                            m_pendingStagingPath});
+}
+
+bool ProviderController::activateMaven(const QString &version)
+{
+    const QString bin = installDirectory(QStringLiteral("maven"), version)
+        + QStringLiteral("/bin");
+    if (!writeCommandShim(QStringLiteral("mvn"), bin + QStringLiteral("/mvn.cmd"))
+        || !writeCommandShim(QStringLiteral("mvnDebug"), bin + QStringLiteral("/mvnDebug.cmd"))
+        || !ensureShimPath())
+        return false;
+    const QVariantMap previous = m_defaultVersions;
+    m_defaultVersions.insert(QStringLiteral("maven"), version);
+    if (!saveDefaults()) {
+        m_defaultVersions = previous;
+        return false;
+    }
+    emit defaultVersionsChanged();
+    return true;
 }
 
 void ProviderController::installAndActivateNode(const QString &version)
@@ -2289,6 +2506,8 @@ bool ProviderController::deactivateProvider(const QString &providerId)
                      QStringLiteral("createuser"), QStringLiteral("dropuser"),
                      QStringLiteral("pg_dump"), QStringLiteral("pg_restore"),
                      QStringLiteral("pg_isready")};
+    else if (providerId == QStringLiteral("maven"))
+        shimNames = {QStringLiteral("mvn"), QStringLiteral("mvnDebug")};
     else
         return false;
 

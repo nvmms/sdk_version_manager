@@ -84,8 +84,16 @@ svm list lts node
 svm list stable flutter
 svm list downloaded node
 
+# 安装 Maven，并自动解析或安装兼容的 Java
+svm install maven 3.9.16
+svm use maven 3.9.16
+svm mvn --version
+
 # 使用项目绑定的 SDK 执行原生命令
 svm node --version
+svm npm --version
+svm javac -version
+svm pip --version
 svm node app.js
 svm flutter doctor
 ```
@@ -151,7 +159,7 @@ IntelliJ IDEA 与 Android Studio 当前没有供 SVM 可靠修改的稳定项目
 3. 全局默认版本；
 4. 最新的已安装版本。
 
-当前 CLI 支持的 Provider ID 为 `node`、`flutter`、`java`、`python`、`php` 和 `go`。Java Provider 从
+当前 CLI 支持的 Provider ID 包括 `node`、`flutter`、`java`、`python`、`php`、`go`、`postgresql` 和 `maven`。Java Provider 从
 Eclipse Adoptium 官方 API 获取 Windows x64 Temurin JDK ZIP，安装前校验官方 SHA-256。
 Python Provider 从 python.org 官方 API 获取 Windows x64 安装程序，同样要求 SHA-256
 校验通过后才安装到 SVM 管理目录。
@@ -167,6 +175,12 @@ SHA-256 或签名，GUI 安装前必须确认风险；CLI 交互环境会询问�
 Go Provider 使用 go.dev 官方完整发行索引和 Windows amd64 ZIP，安装前校验官方
 SHA-256，并通过 `svm go ...` 为项目解析对应的 `GOROOT`。
 
+Maven Provider 使用 Apache 官方发布历史和归档 ZIP，并在安装前校验官方 SHA-512。
+`svm install maven <version>` 会优先复用项目绑定、全局默认或已安装的兼容 Java；没有
+兼容 Java 时自动安装 Java 21 LTS。`svm use maven <version>` 会将解析出的 Maven 和
+Java 版本一起写入 `.svmrc`，`svm mvn ...` 只为该子进程设置 `JAVA_HOME`、`MAVEN_HOME`
+和临时 `PATH`。
+
 ## 当前功能
 
 - 在 GUI 中浏览、刷新和筛选 Node.js / Flutter 版本；
@@ -175,7 +189,7 @@ SHA-256，并通过 `svm go ...` 为项目解析对应的 `GOROOT`。
 - 设置全局默认 SDK 版本；
 - 使用 `.svmrc` 为项目绑定多个 SDK 版本；
 - 从当前目录向父目录查找最近的 `.svmrc`；
-- 通过 `svm node ...`、`svm flutter ...`、`svm java ...`、`svm python ...`、`svm php ...` 和 `svm go ...` 代理执行项目选定的 SDK；
+- 通过 Provider 主入口或其工具入口代理执行项目选定的 SDK，例如 `svm node ...`、`svm npm ...`、`svm dart ...`、`svm javac ...`、`svm pip ...`、`svm mvn ...`、`svm gofmt ...` 和 `svm psql ...`；
 - `svm use` 输出常用 IDE 的项目 SDK 配置提示，但不自动写入 IDE 文件；
 - 通过 `svm ide vscode` 显式合并 VS Code 的 Flutter、Python 和 Java 配置；
 - GUI 与 CLI 通过本机 EventBus 同步任务状态；
