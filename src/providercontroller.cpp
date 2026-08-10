@@ -1437,9 +1437,14 @@ void ProviderController::verifyDownloadedFile(const QByteArray &expectedHash)
         return;
     }
 
-    QFile::remove(m_downloadPath);
+    if (QFileInfo::exists(m_downloadPath) && !QFile::remove(m_downloadPath)) {
+        fail(tr("校验成功，但无法替换已有下载文件：%1")
+                 .arg(m_downloadPath));
+        return;
+    }
     if (!QFile::rename(m_downloadFile.fileName(), m_downloadPath)) {
-        fail(tr("校验成功，但无法完成文件重命名"));
+        fail(tr("校验成功，但无法完成文件重命名：%1")
+                 .arg(m_downloadFile.errorString()));
         return;
     }
 
@@ -1538,7 +1543,11 @@ void ProviderController::verifyPythonDownload()
         fail(tr("无法计算 Python 安装程序的 SHA-256"));
         return;
     }
-    verifyDownloadedFile(hash.result().toHex());
+    const QByteArray hashHex = hash.result().toHex();
+    // QFile on Windows does not grant delete sharing by default. Close this
+    // handle before verifyDownloadedFile() renames the verified .part file.
+    file.close();
+    verifyDownloadedFile(hashHex);
 #else
     QFile::remove(m_downloadFile.fileName());
     fail(tr("当前平台不支持 Python 安装程序签名验证"));
