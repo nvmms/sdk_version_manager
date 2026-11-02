@@ -66,11 +66,16 @@ func TestProxyContract(t *testing.T) {
 	if err = json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatal(err, out.String())
 	}
-	canonicalDir, err := filepath.EvalSymlinks(dir)
+	expectedDir, err := os.Stat(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(got.Args, args) || got.Dir != canonicalDir || got.Input != "interactive input" || !strings.HasPrefix(got.Path, filepath.Dir(target)+string(os.PathListSeparator)) || diagnostics.String() != "child diagnostic" {
+	actualDir, err := os.Stat(got.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Windows may report the same directory through its short or long name.
+	if !reflect.DeepEqual(got.Args, args) || !os.SameFile(expectedDir, actualDir) || got.Input != "interactive input" || !strings.HasPrefix(got.Path, filepath.Dir(target)+string(os.PathListSeparator)) || diagnostics.String() != "child diagnostic" {
 		t.Fatalf("proxy contract failed: %+v stderr=%q", got, diagnostics.String())
 	}
 	if os.Getenv("PATH") != original {

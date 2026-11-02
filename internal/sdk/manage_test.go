@@ -198,3 +198,52 @@ func TestUninstallInterruptedRemovalCanRetry(t *testing.T) {
 		t.Fatal("retry did not finish removal", err)
 	}
 }
+
+func TestProjectLinkPreservesUnownedPaths(t *testing.T) {
+	for _, kind := range []string{"directory", "link", "changed link"} {
+		t.Run(kind, func(t *testing.T) {
+			m := &Manager{Root: t.TempDir(), Providers: []Provider{Node{}}}
+			dir := t.TempDir()
+			ownInstall(t, m, "24.0.0")
+			rc, err := config.Init(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = config.Bind(rc, "node", "24.0.0"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, ".svm", "sdks", "node")
+			if err = os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+				t.Fatal(err)
+			}
+			external := t.TempDir()
+			protected := filepath.Join(external, "keep")
+			if err = os.WriteFile(protected, []byte("user data"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "directory" {
+				if err = os.Mkdir(path, 0755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err = createDirectoryLink(path, external); err != nil {
+					t.Fatal(err)
+				}
+				if kind == "changed link" {
+					if err = config.Write(filepath.Join(dir, ".svm", "node-link.json"), map[string]string{"target": m.Directory("node", "24.0.0")}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			if err = m.ProjectLink(dir, "node", "24.0.0"); err == nil {
+				t.Fatal("overwrote unowned SDK path")
+			}
+			if _, err = os.Lstat(path); err != nil {
+				t.Fatal(err)
+			}
+			if data, err := os.ReadFile(protected); err != nil || string(data) != "user data" {
+				t.Fatal("external data changed", err)
+			}
+		})
+	}
+}

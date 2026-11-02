@@ -56,8 +56,11 @@ func (m *Manager) ProjectLink(project, provider, version string) error {
 	if current, err := filepath.EvalSymlinks(path); err == nil && current == target {
 		return config.Write(marker, map[string]string{"target": target})
 	}
-	if info, err := os.Lstat(path); err == nil {
-		if info.Mode()&os.ModeSymlink == 0 {
+	if _, err := os.Lstat(path); err == nil {
+		// Readlink recognizes both Unix symlinks and Windows junctions.
+		// Junctions need not carry ModeSymlink in FileInfo.
+		actual, linkErr := os.Readlink(path)
+		if linkErr != nil {
 			return errors.New("project SDK path is not a link; it was not overwritten")
 		}
 		// A different link may belong to the user. Only replace a recorded SVM link.
@@ -69,10 +72,6 @@ func (m *Manager) ProjectLink(project, provider, version string) error {
 			return errors.New("project SDK link is not owned by SVM")
 		}
 		if e = json.Unmarshal(b, &owned); e != nil {
-			return e
-		}
-		actual, e := os.Readlink(path)
-		if e != nil {
 			return e
 		}
 		if !filepath.IsAbs(actual) {
