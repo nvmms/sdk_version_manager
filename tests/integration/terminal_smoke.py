@@ -147,3 +147,23 @@ with tempfile.TemporaryDirectory(prefix="svm-go-terminal-") as root:
     executable.chmod(0o755)
     check_session(state, project, [(b"\r", b"svm use go 1.27.39")], None, provider="go")
 print("PASS: Go picker direct install, Go-specific usage and terminal restoration")
+
+with tempfile.TemporaryDirectory(prefix="svm-flutter-terminal-") as root:
+    state, project = Path(root) / "state", Path(root) / "project"
+    project.mkdir()
+    host_os = "macos" if sys.platform == "darwin" else "linux"
+    arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "x64"
+    suffix = ".zip" if host_os == "macos" else ".tar.xz"
+    cache = state / "cache/flutter/versions.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps({"base_url": "https://storage.googleapis.com/flutter_infra_release/releases", "releases": [
+        {"version": f"3.47.{i}", "channel": "stable", "dart_sdk_arch": arch,
+         "release_date": "2026-10-29T00:00:00Z", "archive": f"stable/{host_os}/flutter_fixture_{i}{suffix}", "sha256": "0" * 64}
+        for i in range(40)
+    ]}))
+    executable = state / "installs/flutter/3.47.39/bin/flutter"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fixture; never executed")
+    executable.chmod(0o755)
+    check_session(state, project, [(b"\r", b"svm use flutter 3.47.39")], None, provider="flutter")
+print("PASS: Flutter picker, channel metadata, direct install and Flutter-specific usage")

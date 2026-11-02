@@ -77,7 +77,7 @@ func New() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{Root: root, Providers: []Provider{Node{}, Go{}}}, nil
+	return &Manager{Root: root, Providers: []Provider{Node{}, Go{}, Flutter{}}}, nil
 }
 func (m *Manager) Entry(name string) (Provider, Entry, bool) {
 	for _, p := range m.Providers {
@@ -134,7 +134,12 @@ func (m *Manager) Versions(provider string) ([]string, error) {
 			versions = append(versions, e.Name())
 		}
 	}
-	sort.Slice(versions, func(i, j int) bool { return newer(versions[i], versions[j]) })
+	sort.Slice(versions, func(i, j int) bool {
+		if provider == "flutter" {
+			return flutterNewer(versions[i], versions[j])
+		}
+		return newer(versions[i], versions[j])
+	})
 	return versions, nil
 }
 func newer(a, b string) bool {

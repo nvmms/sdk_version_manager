@@ -22,7 +22,7 @@ func manage(ctx context.Context, command string, args []string, dir string, m *s
 		return setDefault(args, m, out)
 	case "uninstall":
 		if len(args) != 3 || !m.Supports(args[0]) || args[2] != "--yes" {
-			return 2, errors.New("usage: svm uninstall <node|go> <version> --yes; removes the owned SDK installation, preserves project declarations and downloads")
+			return 2, errors.New("usage: svm uninstall <node|go|flutter> <version> --yes; removes the owned SDK installation, preserves project declarations and downloads")
 		}
 		path, err := m.Uninstall(args[0], args[1], dir)
 		if err != nil {
@@ -221,7 +221,7 @@ func currentShell() string {
 	return "bash"
 }
 func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
-	const usage = "usage: svm default <node|go> [version|--clear] [--shell bash|zsh|powershell | --no-shell]"
+	const usage = "usage: svm default <node|go|flutter> [version|--clear] [--shell bash|zsh|powershell | --no-shell]"
 	if len(args) == 0 || !m.Supports(args[0]) {
 		return 2, errors.New(usage)
 	}
@@ -295,7 +295,9 @@ func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
 	} else {
 		fmt.Fprintf(out, "  source '%s'\n", strings.ReplaceAll(profile, "'", `'\''`))
 	}
-	if args[0] == "go" {
+	if args[0] == "flutter" {
+		fmt.Fprintln(out, "Then run: flutter --version")
+	} else if args[0] == "go" {
 		fmt.Fprintln(out, "Then run: go version")
 	} else {
 		fmt.Fprintln(out, "Then run: node --version")

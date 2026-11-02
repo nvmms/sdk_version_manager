@@ -1,6 +1,6 @@
 # SDK Version Manager（SVM）
 
-`go` 分支将 SVM 迁移为纯 Go 命令行工具，不依赖 Qt 或 GUI。当前为迁移首阶段，已实现 Node.js 和 Go 管理；旧 Qt 实现在原分支保留。
+`go` 分支将 SVM 迁移为纯 Go 命令行工具，不依赖 Qt 或 GUI。当前为迁移首阶段，已实现 Node.js、Go 和 Flutter 管理；旧 Qt 实现在原分支保留。
 
 ## 构建与使用
 
@@ -80,6 +80,36 @@ Go 复用 Node.js 的下载续传、校验、私有解压、原子发布、文�
 
 本轮已在 macOS 用官方 Go 包验证安装、版本解析、`go run`、`gofmt`、健康检查、卸载与离线重装。Windows/Linux 交叉编译通过，原生平台运行仍需对应环境验证。
 
+## Flutter Provider
+
+```sh
+svm list flutter                  # 全部可用 stable / beta 发行版本
+svm list stable flutter           # 稳定通道
+svm list beta flutter             # Beta 通道
+svm list flutter --refresh        # 手动刷新官方平台索引
+svm install flutter 3.47.9
+svm use flutter 3.47.9
+svm default flutter 3.47.9
+svm flutter --version
+svm flutter doctor
+svm dart --version                # 使用所选 Flutter 内置的 Dart
+svm uninstall flutter 3.47.9 --yes # 保留下载包供重新 use
+```
+
+从 [Flutter 官方发行索引](https://storage.googleapis.com/flutter_infra_release/releases/releases_macos.json) 按当前平台读取版本、通道、架构、日期和 SHA-256；Windows/Linux 使用各自的 `releases_windows.json` / `releases_linux.json`。没有独立 LTS 通道，使用 stable / beta 筛选。保留原始版本身份，支持 `3.50.0-0.1.pre` 和旧版本 hotfix，按数值与预发布规则比较；只展示匹配当前 CPU 架构且提供可信 SHA-256 的归档。
+
+安装复用下载续传、校验、解压安全检查、原子发布与文件锁。macOS/Windows 使用 ZIP，Linux 使用 tar.xz。SDK 根目录为 `installs/flutter/<version>`，项目稳定链接为 `.svm/sdks/flutter`。完整包与版本索引保留时，卸载后可离线重新 `use`。Flutter 包较大，下载时间和解压空间显著高于 Node.js。
+
+`svm flutter` 和 `svm dart` 都解析 Flutter 项目绑定或全局默认。Unix 使用 SDK 官方启动脚本；Windows 使用内置 Dart 执行 Flutter 工具快照（必要时回退到工具 Dart 源入口），不把用户参数拼接给 cmd.exe。首次运行如缺少工具包配置，会在该 SDK 内准备 Dart 依赖，可能需要联网。Windows 代理路径已做参数保真单元测试与交叉编译，仍需 Windows 原生 Flutter 验证。
+
+Shell 接入支持 Node.js、Go 和 Flutter 同时激活，添加 Flutter/Dart 路径，并设置、切换与恢复 `FLUTTER_ROOT`。不会安装 Android SDK、Xcode、CocoaPods 或修改系统信任。`svm doctor` 检查 Flutter 文件布局、版本元数据与 Git 可用性；详细平台构建依赖使用 `svm flutter doctor` 检查。Flutter/Dart 首次启动和后续构建可能按官方行为下载更多工具或引擎资源。
+
+可选真实包测试（会下载超过 2 GiB 的官方归档，全部在临时目录执行）：
+
+```sh
+SVM_TEST_FLUTTER_VERSION=3.47.9 python3 tests/integration/flutter_sdk_smoke.py
+```
+
 ## 配置与本机状态
 
 `.svmrc` 沿用原格式：
@@ -146,7 +176,7 @@ SVM 不猜测项目入口，也不自动覆盖 VS Code 的 `launch.json`；需�
 
 ## 当前边界
 
-- 当前支持 Node.js 和 Go；其余 Provider 尚未迁移。
+- 当前支持 Node.js、Go 和 Flutter；其余 Provider 尚未迁移。
 - 默认测试使用伪源；本次已在 macOS 用官方 Node.js 包验证完整管理流程。
 - Windows/Linux 交叉编译通过；Windows 控制台、junction、PowerShell 钩子仍需对应平台原生验证。当前机器未安装 PowerShell。
 - Windows 的单进程 Interrupt 转发受 Go/控制台能力限制，Ctrl+C 依赖同一控制台的系统广播；Unix 代理支持 INT/TERM/HUP 转发。
@@ -174,3 +204,7 @@ CI 在 Windows、macOS、Linux 运行测试与构建。新增 Provider 前先完
 ### 终端依赖
 
 `golang.org/x/term v0.29.0` 提供终端检测、原始输入、尺寸与恢复；`golang.org/x/sys v0.30.0` 提供 Windows 控制台与 Unix 非阻塞输入支持。两者为 BSD-3-Clause。下载后的源码目录约为 96 KiB 和 10 MiB（不同平台源码总和，不等于最终二进制增量）。标准库没有跨平台 raw-mode API；使用这两个小型底层库避免为每个平台自行复制终端系统调用。它们不提供 GUI，也不引入完整 TUI 框架。Windows 终端交互需原生验证。
+
+### XZ 解码依赖
+
+Flutter Linux 包使用 `github.com/ulikunitz/xz v0.5.12`（BSD-3-Clause，[许可证](docs/third-party/xz-LICENSE.txt)）。下载源码约 11 MiB，主要包含测试样本，编译只引入所需 XZ/LZMA 解码代码；不依赖 CGo、系统 xz/tar 或额外可执行程序。标准库不提供 XZ 解码，直接使用外部解压程序无法复用当前逐项路径、符号链接与取消检查，因此使用纯 Go 解码器。Windows、macOS、Linux 共用同一解压校验逻辑。

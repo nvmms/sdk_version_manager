@@ -20,13 +20,18 @@ for shell in ("bash", "zsh"):
             exe.parent.mkdir(parents=True)
             exe.write_text("#!/bin/sh\nprintf '%s\\n' \"$GOROOT\"\n")
             exe.chmod(0o755)
+        for version in ("3.47.8","3.47.9"):
+            launcher=state/"installs/flutter"/version/"bin/flutter"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("#!/bin/sh\nprintf '%s\\n' \"$FLUTTER_ROOT\"\n")
+            launcher.chmod(0o755)
         node = state / "installs/node/24.0.0/bin/node"
         node.parent.mkdir(parents=True)
         node.write_text("#!/bin/sh\nprintf 'v24.0.0\\n'\n")
         node.chmod(0o755)
-        (project / ".svmrc").write_text(json.dumps({"schemaVersion": 1, "sdks": {"node": "24.0.0", "go": "1.27.2"}}))
+        (project / ".svmrc").write_text(json.dumps({"schemaVersion": 1, "sdks": {"node": "24.0.0", "go": "1.27.2", "flutter":"3.47.8"}}))
         env = dict(os.environ, HOME=str(home), SVM_HOME=str(state), SHELL=shutil.which(shell),
-                   GOROOT="original-root", GOTOOLCHAIN="auto", TERM="xterm-256color",
+                   GOROOT="original-root",FLUTTER_ROOT="original-flutter", GOTOOLCHAIN="auto", TERM="xterm-256color",
                    SVM_TEST_BINARY=binary, SVM_TEST_PROJECT=str(project), SVM_TEST_OUTSIDE=str(outside), SVM_TEST_STATE=str(state))
         for key in list(env):
             if key.startswith("SVM_ACTIVE_") or key.startswith("SVM_ORIGINAL_"):
@@ -34,21 +39,26 @@ for shell in ("bash", "zsh"):
         env.pop("ZDOTDIR", None)
         subprocess.run([binary, "default", "node", "24.0.0", "--shell", shell], env=env, cwd=outside, check=True, capture_output=True)
         subprocess.run([binary, "default", "go", "1.27.3", "--shell", shell], env=env, cwd=outside, check=True, capture_output=True)
+        subprocess.run([binary,"default","flutter","3.47.9","--shell",shell],env=env,cwd=outside,check=True,capture_output=True)
         script = '''
 [ "$(go)" = "$SVM_TEST_STATE/installs/go/1.27.3" ] || exit 21
 [ "$GOTOOLCHAIN" = local ] || exit 22
+[ "$(flutter)" = "$SVM_TEST_STATE/installs/flutter/3.47.9" ] || exit 29
 [ "$(node --version)" = v24.0.0 ] || exit 23
 cd "$SVM_TEST_PROJECT"
 _svm_prompt
 [ "$(go)" = "$SVM_TEST_STATE/installs/go/1.27.2" ] || exit 24
+[ "$(flutter)" = "$SVM_TEST_STATE/installs/flutter/3.47.8" ] || exit 30
 "$SVM_TEST_BINARY" default go --clear --no-shell >/dev/null
+"$SVM_TEST_BINARY" default flutter --clear --no-shell >/dev/null
 cd "$SVM_TEST_OUTSIDE"
 _svm_prompt
 [ "$GOROOT" = original-root ] || exit 25
+[ "$FLUTTER_ROOT" = original-flutter ] || exit 31
 [ "$GOTOOLCHAIN" = auto ] || exit 26
 [ "$(node --version)" = v24.0.0 ] || exit 27
 [ "${SVM_ACTIVE_GO+x}" != x ] || exit 28
 '''
         result = subprocess.run([shell, "-ic", script], env=env, cwd=outside, text=True, capture_output=True)
         assert result.returncode == 0, (shell, result.returncode, result.stdout, result.stderr)
-        print("PASS:", shell, "Node+Go coexistence, project override, Go default activation, GOROOT/GOTOOLCHAIN restoration")
+        print("PASS:", shell, "Node+Go+Flutter coexistence, project overrides, SDK defaults and environment restoration")

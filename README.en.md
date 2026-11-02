@@ -1,6 +1,6 @@
 # SDK Version Manager (SVM)
 
-The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. The Go CLI supports Node.js and Go; other Providers have not been ported.
+The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. The Go CLI supports Node.js, Go and Flutter; other Providers have not been ported.
 
 Requires Go 1.23+. Terminal handling uses golang.org/x/term and golang.org/x/sys (BSD-3-Clause):
 
@@ -75,3 +75,23 @@ Go uses the [official complete release index](https://go.dev/dl/?mode=json&inclu
 Node.js and Go can be bound together. Activation and proxies set GOROOT and pin GOTOOLCHAIN=local so Go cannot silently switch compilers. GOPATH is preserved. Shell deactivation restores previous GOROOT/GOTOOLCHAIN values. Official install, go run, gofmt, health, uninstall and offline reinstall were verified on macOS; other native platforms need their own runtime validation.
 
 Run `python3 tests/integration/go_shell_smoke.py` for offline multi-Provider activation checks. Opt into a real download with `SVM_TEST_GO_VERSION=1.27.3 python3 tests/integration/go_sdk_smoke.py`.
+
+## Flutter Provider
+
+```sh
+svm list flutter
+svm list stable flutter
+svm list beta flutter
+svm use flutter 3.47.9
+svm default flutter 3.47.9
+svm flutter --version
+svm flutter doctor
+svm dart --version
+svm uninstall flutter 3.47.9 --yes
+```
+
+Uses the platform-specific [official Flutter indexes](https://storage.googleapis.com/flutter_infra_release/releases/releases_macos.json), CPU architecture metadata and SHA-256 checksums. Stable/beta channels, prerelease and hotfix version ordering, cached/offline reinstall, the terminal picker and safe uninstall share the existing workflow. macOS/Windows use ZIP and Linux uses tar.xz. XZ decoding uses the pure Go BSD-3-Clause library github.com/ulikunitz/xz v0.5.12; see [license](docs/third-party/xz-LICENSE.txt). Its source download is about 11 MiB including test data, with no external executable or CGo requirement.
+
+Flutter and bundled Dart are proxied from the selected SDK. Unix uses the official launchers; Windows directly invokes bundled Dart with Flutter's tool snapshot or Dart entry source, preserving arguments without cmd.exe. Missing tool dependency configuration may require a first-run pub get. Windows native Flutter execution remains unverified. Shell activation supports all three Providers and restores FLUTTER_ROOT on deactivation. SVM does not install platform build dependencies; use svm flutter doctor for Android/Xcode/CocoaPods checks.
+
+Opt into the full SDK lifecycle test with `SVM_TEST_FLUTTER_VERSION=3.47.9 python3 tests/integration/flutter_sdk_smoke.py` (over 2 GiB download in a temporary directory).

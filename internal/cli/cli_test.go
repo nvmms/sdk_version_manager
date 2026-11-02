@@ -219,3 +219,31 @@ func TestGoCommandsUseSharedWorkflow(t *testing.T) {
 		t.Fatal(p, err)
 	}
 }
+
+func TestFlutterCommandsAndChannels(t *testing.T) {
+	m := &sdk.Manager{Root: t.TempDir(), Providers: []sdk.Provider{sdk.Flutter{}}}
+	dir := t.TempDir()
+	entry, _ := (sdk.Flutter{}).Entry("flutter")
+	exe := filepath.Join(m.Directory("flutter", "3.47.9"), entry.Executable)
+	os.MkdirAll(filepath.Dir(exe), 0755)
+	os.WriteFile(exe, []byte("fixture"), 0755)
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"list", "installed", "flutter", "--plain"}, 0},
+		{[]string{"list", "lts", "flutter"}, 2},
+		{[]string{"use", "flutter", "3.47.9"}, 0},
+		{[]string{"default", "flutter", "3.47.9", "--no-shell"}, 0},
+		{[]string{"default", "flutter"}, 0},
+	} {
+		var out, diagnostics bytes.Buffer
+		if code := Run(context.Background(), tc.args, dir, m, nil, &out, &diagnostics); code != tc.code {
+			t.Fatal(tc.args, code, diagnostics.String())
+		}
+	}
+	p, err := config.Read(filepath.Join(dir, ".svmrc"))
+	if err != nil || p.SDKs["flutter"] != "3.47.9" {
+		t.Fatal(p, err)
+	}
+}

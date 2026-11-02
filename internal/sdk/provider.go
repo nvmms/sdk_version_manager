@@ -30,6 +30,8 @@ func ValidVersion(provider, version string) bool {
 		return nodeVersion.MatchString(version)
 	case "go":
 		return goVersion.MatchString(version)
+	case "flutter":
+		return flutterVersion.MatchString(version)
 	}
 	return false
 }
@@ -50,6 +52,8 @@ func (m *Manager) Install(ctx context.Context, provider, version string, out io.
 		return m.InstallNode(ctx, version, out)
 	case "go":
 		return m.InstallGo(ctx, version, out)
+	case "flutter":
+		return m.InstallFlutter(ctx, version, out)
 	}
 	return fmt.Errorf("installation unsupported for %s", provider)
 }

@@ -6,3 +6,5 @@ require (
 	golang.org/x/sys v0.30.0
 	golang.org/x/term v0.29.0
 )
+
+require github.com/ulikunitz/xz v0.5.12

@@ -31,7 +31,7 @@ func (m *Manager) Environment(dir, shell string) (string, error) {
 			return "", fmt.Errorf("%s %s is not installed; run svm install %s %s", p.ID(), v, p.ID(), v)
 		}
 		entry, _ := p.Entry(p.ID())
-		bins = append(bins, filepath.Dir(filepath.Join(m.Directory(p.ID(), v), entry.Executable)))
+		bins = append(bins, sdkBins(p.ID(), m.Directory(p.ID(), v), filepath.Join(m.Directory(p.ID(), v), entry.Executable))...)
 		selected[p.ID()] = v
 	}
 	var b strings.Builder
@@ -58,6 +58,7 @@ func (m *Manager) Environment(dir, shell string) (string, error) {
 			}
 			b.WriteString("Remove-Item Env:SVM_ACTIVE_GO -ErrorAction SilentlyContinue\n")
 		}
+		flutterEnvironment(&b, m, selected["flutter"], true)
 		return b.String(), nil
 	}
 	if len(bins) > 0 {
@@ -82,5 +83,24 @@ func (m *Manager) Environment(dir, shell string) (string, error) {
 		}
 		b.WriteString("unset SVM_ACTIVE_GO\n")
 	}
+	flutterEnvironment(&b, m, selected["flutter"], false)
 	return b.String(), nil
+}
+
+func flutterEnvironment(b *strings.Builder, m *Manager, version string, powershell bool) {
+	if powershell {
+		if version != "" {
+			b.WriteString("if (!(Test-Path Env:SVM_ACTIVE_FLUTTER)) { if (Test-Path Env:FLUTTER_ROOT) { $env:SVM_ORIGINAL_FLUTTER_ROOT=$env:FLUTTER_ROOT; $env:SVM_ORIGINAL_FLUTTER_ROOT_SET='1' } else { $env:SVM_ORIGINAL_FLUTTER_ROOT_SET='0' } }\n")
+			b.WriteString("$env:FLUTTER_ROOT=" + powershellQuote(m.Directory("flutter", version)) + "\n$env:SVM_ACTIVE_FLUTTER=" + powershellQuote(version) + "\n")
+		} else {
+			b.WriteString("if (Test-Path Env:SVM_ACTIVE_FLUTTER) { if ($env:SVM_ORIGINAL_FLUTTER_ROOT_SET -eq '1') { $env:FLUTTER_ROOT=$env:SVM_ORIGINAL_FLUTTER_ROOT } else { Remove-Item Env:FLUTTER_ROOT -ErrorAction SilentlyContinue }; Remove-Item Env:SVM_ACTIVE_FLUTTER,Env:SVM_ORIGINAL_FLUTTER_ROOT,Env:SVM_ORIGINAL_FLUTTER_ROOT_SET -ErrorAction SilentlyContinue }\n")
+		}
+		return
+	}
+	if version != "" {
+		b.WriteString("if [ \"${SVM_ACTIVE_FLUTTER+x}\" != x ]; then if [ \"${FLUTTER_ROOT+x}\" = x ]; then export SVM_ORIGINAL_FLUTTER_ROOT=\"$FLUTTER_ROOT\" SVM_ORIGINAL_FLUTTER_ROOT_SET=1; else export SVM_ORIGINAL_FLUTTER_ROOT_SET=0; fi; fi\n")
+		b.WriteString("export FLUTTER_ROOT=" + shellQuote(m.Directory("flutter", version)) + "\nexport SVM_ACTIVE_FLUTTER=" + shellQuote(version) + "\n")
+	} else {
+		b.WriteString("if [ \"${SVM_ACTIVE_FLUTTER+x}\" = x ]; then if [ \"${SVM_ORIGINAL_FLUTTER_ROOT_SET-0}\" = 1 ]; then export FLUTTER_ROOT=\"$SVM_ORIGINAL_FLUTTER_ROOT\"; else unset FLUTTER_ROOT; fi; unset SVM_ACTIVE_FLUTTER SVM_ORIGINAL_FLUTTER_ROOT SVM_ORIGINAL_FLUTTER_ROOT_SET; fi\n")
+	}
 }

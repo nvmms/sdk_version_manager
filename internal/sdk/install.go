@@ -20,6 +20,7 @@ import (
 
 	"github.com/nvmms/sdk_version_manager/internal/config"
 	"github.com/nvmms/sdk_version_manager/internal/filelock"
+	"github.com/ulikunitz/xz"
 )
 
 var nodeVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -133,6 +134,11 @@ func (m *Manager) publishArchive(ctx context.Context, provider, version, name, a
 	if err != nil || !info.Mode().IsRegular() {
 		return fmt.Errorf("archive does not contain the expected %s executable", provider)
 	}
+	if provider == "flutter" {
+		if err = flutterLayout(extracted, runtime.GOOS); err != nil {
+			return err
+		}
+	}
 	if err = ctx.Err(); err != nil {
 		return err
 	}
@@ -193,6 +199,7 @@ func writeEntry(path string, mode os.FileMode, r io.Reader) error {
 	return closeErr
 }
 func extractZip(ctx context.Context, archive, root string) error {
+	var links []archiveLink
 	var canonicalErr error
 	root, canonicalErr = filepath.EvalSymlinks(root)
 	if canonicalErr != nil {
@@ -212,7 +219,23 @@ func extractZip(ctx context.Context, archive, root string) error {
 			return err
 		}
 		if f.Mode()&os.ModeSymlink != 0 {
-			return errors.New("ZIP symbolic links are not supported")
+			r, err := f.Open()
+			if err != nil {
+				return err
+			}
+			target, err := io.ReadAll(io.LimitReader(r, 4097))
+			r.Close()
+			if err != nil {
+				return err
+			}
+			if len(target) > 4096 {
+				return errors.New("archive link target too long")
+			}
+			if err = checkArchiveLink(root, path, string(target)); err != nil {
+				return err
+			}
+			links = append(links, archiveLink{path, string(target)})
+			continue
 		}
 		if f.FileInfo().IsDir() {
 			if err := os.MkdirAll(path, 0755); err != nil {
@@ -226,11 +249,14 @@ func extractZip(ctx context.Context, archive, root string) error {
 		}
 		err = writeEntry(path, f.Mode(), r)
 		r.Close()
+		if err == nil && !f.Modified.IsZero() {
+			err = os.Chtimes(path, f.Modified, f.Modified)
+		}
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	return createArchiveLinks(root, links)
 }
 func extractTar(ctx context.Context, archive, root string) error {
 	var canonicalErr error
@@ -243,14 +269,23 @@ func extractTar(ctx context.Context, archive, root string) error {
 		return err
 	}
 	defer file.Close()
-	gz, err := gzip.NewReader(file)
-	if err != nil {
-		return err
+	var input io.Reader
+	if strings.HasSuffix(archive, ".xz") || strings.HasSuffix(archive, ".xz.part") {
+		decoder, err := xz.NewReader(file)
+		if err != nil {
+			return err
+		}
+		input = decoder
+	} else {
+		gz, err := gzip.NewReader(file)
+		if err != nil {
+			return err
+		}
+		defer gz.Close()
+		input = gz
 	}
-	defer gz.Close()
-	reader := tar.NewReader(gz)
-	type link struct{ path, target string }
-	var links []link
+	reader := tar.NewReader(input)
+	var links []archiveLink
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -275,16 +310,38 @@ func extractTar(ctx context.Context, archive, root string) error {
 			if err = writeEntry(path, os.FileMode(h.Mode), reader); err != nil {
 				return err
 			}
+			if !h.ModTime.IsZero() {
+				if err = os.Chtimes(path, h.ModTime, h.ModTime); err != nil {
+					return err
+				}
+			}
 		case tar.TypeSymlink:
 			// Create links last: archive members cannot write through a link to escape staging.
 			if _, err = archivePath(root, filepath.ToSlash(filepath.Join(filepath.Dir(h.Name), h.Linkname))); err != nil || filepath.IsAbs(h.Linkname) || strings.ContainsAny(h.Linkname, "\\:") {
 				return errors.New("unsafe archive symbolic link")
 			}
-			links = append(links, link{path, h.Linkname})
+			links = append(links, archiveLink{path, h.Linkname})
 		default:
 			return fmt.Errorf("unsupported archive entry %q", h.Name)
 		}
 	}
+	return createArchiveLinks(root, links)
+}
+
+type archiveLink struct{ path, target string }
+
+func checkArchiveLink(root, path, target string) error {
+	if filepath.IsAbs(target) || strings.ContainsAny(target, "\\:") {
+		return errors.New("unsafe archive symbolic link")
+	}
+	relative, err := filepath.Rel(root, filepath.Join(filepath.Dir(path), target))
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return errors.New("archive symbolic link escapes staging")
+	}
+	return nil
+}
+func createArchiveLinks(root string, links []archiveLink) error {
+	var err error
 	for _, l := range links {
 		// Parents must already be real directories; never follow an earlier archive link.
 		parent := filepath.Dir(l.path)

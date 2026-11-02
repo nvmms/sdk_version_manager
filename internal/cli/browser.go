@@ -71,7 +71,7 @@ func (b *browserModel) render(out io.Writer, width, height int, provider string)
 	}
 	line("SVM / " + provider + " versions")
 	line("↑/↓ Select · PgUp/PgDn Page · Home/End · Enter Download · q/Esc Quit")
-	line("   INSTALLED  VERSION          LTS           RELEASED")
+	line("   INSTALLED  VERSION          CHANNEL/LTS   RELEASED")
 	for i := b.top; i < min(len(b.versions), b.top+rows); i++ {
 		v := b.versions[i]
 		mark := "-"
@@ -82,7 +82,7 @@ func (b *browserModel) render(out io.Writer, width, height int, provider string)
 		if i == b.selected {
 			cursor = "> "
 		}
-		row := fit(fmt.Sprintf("%s %-9s  %-15s  %-12s  %s", cursor, mark, v.Number, v.LTS, v.Date), max(1, width-1))
+		row := fit(fmt.Sprintf("%s %-9s  %-15s  %-12s  %s", cursor, mark, v.Number, versionChannel(v), v.Date), max(1, width-1))
 		if i == b.selected {
 			screen.WriteString("\x1b[7m" + row + "\x1b[0m\r\n")
 		} else {
@@ -131,7 +131,9 @@ func browse(ctx context.Context, dir string, m *sdk.Manager, provider string, ve
 	defer func() {
 		if completedVersion != "" {
 			fmt.Fprintf(out, "Installed %s %s.\n\nUse in this project:\n  svm use %s %s\n\nRun commands:\n", provider, completedVersion, provider, completedVersion)
-			if provider == "go" {
+			if provider == "flutter" {
+				fmt.Fprintln(out, "  svm flutter --version\n  svm dart --version")
+			} else if provider == "go" {
 				fmt.Fprintln(out, "  svm go version\n  svm go env GOROOT")
 			} else {
 				fmt.Fprintln(out, "  svm node --version\n  svm npm --version")

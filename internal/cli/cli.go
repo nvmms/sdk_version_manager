@@ -20,18 +20,18 @@ import (
 const help = `SVM — SDK Version Manager (Go CLI)
 Usage:
   svm use [provider [version]]
-  svm install <node|go> <version>
-  svm list [all|lts|installed] [node|go] [--refresh] [--plain]
-  svm default <node|go> [version|--clear] [--shell bash|zsh|powershell | --no-shell]
-  svm uninstall <node|go> <version> --yes
+  svm install <node|go|flutter> <version>
+  svm list [all|lts|stable|beta|installed] [node|go|flutter] [--refresh] [--plain]
+  svm default <node|go|flutter> [version|--clear] [--shell bash|zsh|powershell | --no-shell]
+  svm uninstall <node|go|flutter> <version> --yes
   svm proxy [show|set <http-url>|clear]
   svm doctor
-  svm <node|npm|npx|corepack|go|gofmt> [arguments...]
+  svm <node|npm|npx|corepack|go|gofmt|flutter|dart> [arguments...]
 
 use queries or sets the current project version. Selection order:
 explicit version, nearest .svmrc, global default, newest installed version.
 Missing versions are installed automatically. No noninteractive prompts.
-SVM_HOME overrides the local state directory. This migration currently supports Node.js and Go.
+SVM_HOME overrides the local state directory. This migration currently supports Node.js, Go and Flutter.
 `
 
 func Run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.Reader, out, diagnostics io.Writer) int {
@@ -68,7 +68,7 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 	switch command {
 	case "install":
 		if len(rest) != 2 || !m.Supports(rest[0]) {
-			return 2, errors.New("usage: svm install <node|go> <version>; supported Providers: node, go")
+			return 2, errors.New("usage: svm install <node|go|flutter> <version>; supported Providers: node, go, flutter")
 		}
 		return result(m.Install(ctx, rest[0], rest[1], diagnostics))
 	case "list":
@@ -79,7 +79,7 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 			return manage(ctx, "default", forwarded, dir, m, out, diagnostics)
 		}
 		if len(rest) > 2 || len(rest) > 0 && !m.Supports(rest[0]) {
-			return 2, errors.New("usage: svm use [provider [version]]; supported Providers: node, go")
+			return 2, errors.New("usage: svm use [provider [version]]; supported Providers: node, go, flutter")
 		}
 		if len(rest) == 0 {
 			path, err := config.Find(dir)

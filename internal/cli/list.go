@@ -25,23 +25,23 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 				return 2, errors.New("--refresh specified twice")
 			}
 			refresh = true
-		case "all", "lts", "installed", "--installed":
+		case "all", "lts", "stable", "beta", "installed", "--installed":
 			if haveFilter {
-				return 2, errors.New("specify only one list filter: all, lts, installed")
+				return 2, errors.New("specify only one list filter: all, lts, stable, beta, installed")
 			}
 			filter = arg
 			if filter == "--installed" {
 				filter = "installed"
 			}
 			haveFilter = true
-		case "node", "go":
+		case "node", "go", "flutter":
 			if haveProvider {
 				return 2, errors.New("specify only one Provider")
 			}
 			provider = arg
 			haveProvider = true
 		default:
-			return 2, fmt.Errorf("unsupported list argument %q; usage: svm list [all|lts|installed] [node|go] [--refresh] [--plain] (supported Providers: node, go)", arg)
+			return 2, fmt.Errorf("unsupported list argument %q; usage: svm list [all|lts|stable|beta|installed] [node|go|flutter] [--refresh] [--plain] (supported Providers: node, go, flutter)", arg)
 		}
 	}
 	if filter == "installed" && refresh {
@@ -52,6 +52,12 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 	}
 	if provider == "go" && filter == "lts" {
 		return 2, errors.New("Go does not define an LTS channel; use svm list go")
+	}
+	if provider == "flutter" && filter == "lts" {
+		return 2, errors.New("Flutter uses stable and beta channels; use svm list stable flutter")
+	}
+	if provider != "flutter" && (filter == "stable" || filter == "beta") {
+		return 2, errors.New("stable/beta filters are currently for Flutter")
 	}
 	var versions []sdk.Version
 	if filter == "installed" {
@@ -79,11 +85,20 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 		}
 		versions = filtered
 	}
+	if filter == "stable" || filter == "beta" {
+		filtered := make([]sdk.Version, 0, len(versions))
+		for _, v := range versions {
+			if v.Channel == filter {
+				filtered = append(filtered, v)
+			}
+		}
+		versions = filtered
+	}
 	if !plain && terminal.Supported(in, out) {
 		return browse(ctx, dir, m, provider, versions, out.(*os.File))
 	}
 	writer := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(writer, "INSTALLED\tPROVIDER\tVERSION\tLTS\tRELEASED")
+	fmt.Fprintln(writer, "INSTALLED\tPROVIDER\tVERSION\tCHANNEL/LTS\tRELEASED")
 	count, installedCount := 0, 0
 	for _, v := range versions {
 		mark := "-"
@@ -91,7 +106,7 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 			mark = "✓"
 			installedCount++
 		}
-		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", mark, provider, v.Number, v.LTS, v.Date)
+		fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\n", mark, provider, v.Number, versionChannel(v), v.Date)
 		count++
 	}
 	if err := writer.Flush(); err != nil {
@@ -103,4 +118,11 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 		fmt.Fprintf(out, "\n%d versions, %d installed (✓).\n", count, installedCount)
 	}
 	return 0, nil
+}
+
+func versionChannel(v sdk.Version) string {
+	if v.Channel != "" {
+		return v.Channel
+	}
+	return v.LTS
 }

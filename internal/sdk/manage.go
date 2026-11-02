@@ -181,6 +181,9 @@ func (m *Manager) HealthFor(ctx context.Context, provider, version string) error
 	if provider == "go" {
 		return m.goHealth(ctx, version)
 	}
+	if provider == "flutter" {
+		return m.flutterHealth(ctx, version)
+	}
 	lock, err := filelock.Acquire(m.versionLock("node", version), true)
 	if err != nil {
 		return err

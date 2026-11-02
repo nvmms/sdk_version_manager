@@ -19,6 +19,7 @@ import (
 // Version describes an installable release plus its current local installation state.
 type Version struct {
 	Number    string
+	Channel   string
 	Date      string
 	LTS       string
 	Installed bool
@@ -34,11 +35,14 @@ type nodeRelease struct {
 // Catalog reads the cached official index. Only a missing cache or explicit refresh uses the network.
 func (m *Manager) Catalog(ctx context.Context, provider string, refresh bool) ([]Version, error) {
 	if !m.Supports(provider) {
-		return nil, fmt.Errorf("Provider %q is not migrated yet; currently supported: node, go", provider)
+		return nil, fmt.Errorf("Provider %q is not migrated yet; currently supported: node, go, flutter", provider)
 	}
 	client, err := m.Client(30 * time.Second)
 	if err != nil {
 		return nil, err
+	}
+	if provider == "flutter" {
+		return m.flutterCatalog(ctx, refresh, client, flutterIndexURL())
 	}
 	if provider == "go" {
 		return m.goCatalog(ctx, refresh, client, "https://go.dev/dl/?mode=json&include=all")
