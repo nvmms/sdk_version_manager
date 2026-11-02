@@ -2,6 +2,33 @@
 
 `go` 分支将 SVM 迁移为纯 Go 命令行工具，不依赖 Qt 或 GUI。当前为迁移首阶段，已实现 Node.js、Go 和 Flutter 管理；旧 Qt 实现在原分支保留。
 
+## 一键安装（macOS / Linux）
+
+新版 CLI Release 发布后，下载安装脚本并执行，无需 Go 编译环境或 sudo：
+
+```sh
+curl -fsSL https://github.com/nvmms/sdk_version_manager/releases/latest/download/install.sh -o /tmp/svm-install.sh
+sh /tmp/svm-install.sh
+```
+
+默认识别 macOS / Linux 与 x64 / ARM64，从 GitHub Release 获取对应包，校验 SHA-256 后安装到 `~/.svm/bin/svm`。自动为 Bash/Zsh 配置 PATH，支持 ZDOTDIR 和现有配置文件的符号链接；新开终端即可使用 `svm --help`。当前终端也可执行安装输出中的 `export PATH=...` 命令。脚本只安装 SVM，不下载语言 SDK，也不改变 SDK 状态目录 `SVM_HOME`。
+
+指定版本、安装目录或跳过 Shell 配置：
+
+```sh
+sh /tmp/svm-install.sh --version v0.1.0
+SVM_INSTALL_DIR="$HOME/.local/share/svm" sh /tmp/svm-install.sh
+sh /tmp/svm-install.sh --no-profile
+# 自定义接入文件；否则按 SHELL 自动选择 Bash/Zsh 配置
+SVM_PROFILE="$HOME/.profile" sh /tmp/svm-install.sh
+```
+
+重复执行可升级；二进制在同目录中原子替换，上一份保留为 `bin/svm.previous`。校验或解包检查失败时不会替换已安装的程序；不会覆盖非本安装器管理的同名二进制。只从归档中提取预期的普通文件，不展开任意路径或符号链接。Shell 配置仅更新 SVM 的 PATH 标记块，保留原有内容及权限。安装锁因强制终止遗留时，先确认安装器已停止，再移除安装目录的 `.installer-lock`。
+
+需要 curl、tar、awk、sed、grep、mktemp、stat 及 sha256sum/shasum，常规 macOS/Linux 环境已具备。安装过程需要能访问 GitHub；没有兼容平台包或尚未发布新版 CLI 时会明确报错。Windows 原生环境使用 Release 中的 ZIP；WSL 使用 Linux 包。
+
+仓库本地脚本为 [install.sh](install.sh)。测试可运行 `python3 tests/integration/installer_smoke.py`，不会联网，也不会修改真实 HOME。
+
 ## 构建与使用
 
 需要 Go 1.23+。终端交互使用 `golang.org/x/term` 和 `golang.org/x/sys`（BSD-3-Clause）：
@@ -142,7 +169,7 @@ svm default node 24.0.0 --shell zsh # 显式指定要接入的 Shell
 svm default node                 # 查询全局默认
 svm default node --clear          # 清除全局默认
 svm use node 24.0.0 --global      # 同 default node 24.0.0
-svm uninstall node 24.0.0 --yes   # 将受管理安装移入恢复目录
+svm uninstall node 24.0.0 --yes   # 删除受管理安装，保留下载包
 svm proxy set http://127.0.0.1:7890
 svm proxy show
 svm proxy clear
@@ -183,6 +210,42 @@ SVM 不猜测项目入口，也不自动覆盖 VS Code 的 `launch.json`；需�
 - 暂不管理系统包管理器或其他版本管理器安装的 Node.js，不自动接管其目录。
 - 不提供自动永久清理恢复目录或下载缓存；保留恢复能力优先。
 - 解压当前只使用固定官方源，尚无总解压大小配额。
+
+## GitHub Actions 打包与发布
+
+工作流为 [Package SVM](.github/workflows/release.yml)：
+
+- 手动打包：在 GitHub Actions 选择该工作流，点击 **Run workflow**。版本可留空（生成 `dev-<commit>`）或填写 `v0.1.0` 等版本；手动运行只上传 Artifacts，不创建 Release。
+- 标签发布：推送三段版本号的 `v*` 标签，测试、打包和校验通过后自动创建或更新 GitHub Release；带 `-rc.1` 等后缀的标签会标为预发布。
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+每次生成六个便携包，并发布 `install.sh` 与其校验文件：
+
+| 平台 | 架构 | 文件名示例 |
+| --- | --- | --- |
+| Windows | x64 | `svm-v0.1.0-windows-x64.zip` |
+| Windows | ARM64 | `svm-v0.1.0-windows-arm64.zip` |
+| macOS | Intel x64 | `svm-v0.1.0-macos-x64.tar.gz` |
+| macOS | Apple Silicon ARM64 | `svm-v0.1.0-macos-arm64.tar.gz` |
+| Linux | x64 | `svm-v0.1.0-linux-x64.tar.gz` |
+| Linux | ARM64 | `svm-v0.1.0-linux-arm64.tar.gz` |
+
+包内包含 CLI、使用说明、构建版本/提交信息和第三方许可证；不包含 SDK、个人配置或 Qt。Windows/macOS/Linux runner 会先运行原生单元测试和 vet；macOS 额外执行终端与 Shell 测试，再分别编译两种架构。目标与 runner 原生架构一致时执行打包二进制的帮助冒烟检查；另一架构只交叉编译。
+
+每包附 SHA-256，Release 同时提供合并的 `SHA256SUMS`。Artifacts 保留 14 天；Release 附件长期保留。仅发布 job 获得写权限，使用仓库自带的 `GITHUB_TOKEN`，无需额外 Secret。当前是便携压缩包，不含安装程序、Windows 签名或 macOS 签名/公证。
+
+本地也可以用相同脚本打包：
+
+```sh
+python3 scripts/package_release.py --os darwin --arch arm64 --version v0.1.0
+python3 scripts/package_release.py --os windows --arch amd64 --version v0.1.0
+```
+
+输出到 `dist/`；可用 `--output` 调整目录，用 `SVM_BUILD_GO` 指定编译器可执行文件。工作流使用 Go stable 编译，并通过 `go.mod` / `go.sum` 锁定应用依赖。
 
 ## 验证
 

@@ -2,6 +2,21 @@
 
 The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. The Go CLI supports Node.js, Go and Flutter; other Providers have not been ported.
 
+## Install on macOS / Linux
+
+After a compatible CLI Release is published:
+
+```sh
+curl -fsSL https://github.com/nvmms/sdk_version_manager/releases/latest/download/install.sh -o /tmp/svm-install.sh
+sh /tmp/svm-install.sh
+```
+
+The [installer](install.sh) detects macOS/Linux and x64/ARM64, downloads a pinned GitHub Release asset and verifies SHA-256 before installing to ~/.svm/bin/svm. No Go compiler or sudo is needed. It configures Bash/Zsh PATH while preserving profile contents, permissions and symlinks. Open a new terminal or apply the printed export command.
+
+Use `--version v0.1.0`, `--no-profile`, SVM_INSTALL_DIR or SVM_PROFILE for custom setups. Repeat installation upgrades atomically and keeps bin/svm.previous. Unowned executables are not overwritten. Only expected regular archive files are extracted to explicit paths. SDK storage and existing SDKs are untouched. Windows uses the portable ZIP; WSL uses Linux assets.
+
+Requires curl, tar, awk, sed, grep, mktemp, stat and sha256sum/shasum. An interrupted installer may leave .installer-lock; remove it only after confirming the installer has stopped. Run `python3 tests/integration/installer_smoke.py` for offline tests in an isolated HOME.
+
 Requires Go 1.23+. Terminal handling uses golang.org/x/term and golang.org/x/sys (BSD-3-Clause):
 
 ```sh
@@ -95,3 +110,13 @@ Uses the platform-specific [official Flutter indexes](https://storage.googleapis
 Flutter and bundled Dart are proxied from the selected SDK. Unix uses the official launchers; Windows directly invokes bundled Dart with Flutter's tool snapshot or Dart entry source, preserving arguments without cmd.exe. Missing tool dependency configuration may require a first-run pub get. Windows native Flutter execution remains unverified. Shell activation supports all three Providers and restores FLUTTER_ROOT on deactivation. SVM does not install platform build dependencies; use svm flutter doctor for Android/Xcode/CocoaPods checks.
 
 Opt into the full SDK lifecycle test with `SVM_TEST_FLUTTER_VERSION=3.47.9 python3 tests/integration/flutter_sdk_smoke.py` (over 2 GiB download in a temporary directory).
+
+## Windows, macOS and Linux packages
+
+[Package SVM](.github/workflows/release.yml) supports manual runs and pushed `v*` tags. Manual runs upload Actions artifacts only; tagged runs publish/update GitHub Releases after checks succeed. Use a SemVer tag such as `v0.1.0`; prerelease tags are marked accordingly.
+
+Produces Windows x64/ARM64 ZIPs and macOS/Linux x64/ARM64 tar.gz files. Also publishes install.sh and its checksum. Each includes the CLI, documentation, build/commit metadata and dependency licenses, with a SHA-256 sidecar. Releases also include SHA256SUMS. Artifacts are retained for 14 days. Packages are portable, unsigned and not notarized; there is no installer or Qt runtime.
+
+Native tests and vet run on Windows/macOS/Linux; terminal/shell smoke tests run on macOS. Both CPU architectures are built with CGO disabled. A help smoke test runs when the target matches the runner architecture; the other target is only cross-compiled. The release job alone receives contents:write, using GITHUB_TOKEN without extra secrets.
+
+Local equivalent: `python3 scripts/package_release.py --os darwin --arch arm64 --version v0.1.0` (also supports windows/amd64). Output defaults to dist. Set SVM_BUILD_GO to use a compiler outside PATH.

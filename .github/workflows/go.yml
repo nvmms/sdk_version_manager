@@ -31,3 +31,9 @@ jobs:
       - name: Go and Node shell activation test
         if: runner.os != 'Windows'
         run: python3 tests/integration/go_shell_smoke.py
+
+      - name: Unix installer tests
+        if: runner.os != 'Windows'
+        run: |
+          sh -n install.sh
+          python3 tests/integration/installer_smoke.py

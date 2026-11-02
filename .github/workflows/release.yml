@@ -1,0 +1,159 @@
+name: Package SVM
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Archive version (e.g. v0.1.0); empty uses dev-<commit>. Manual runs do not publish.'
+        required: false
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows
+            goos: windows
+          - runner: macos-latest
+            target: macos
+            goos: darwin
+          - runner: ubuntu-latest
+            target: linux
+            goos: linux
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Resolve archive version
+        id: metadata
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          python - <<'PY'
+          import os, re
+          if os.environ['GITHUB_REF'].startswith('refs/tags/'):
+              version = os.environ['GITHUB_REF_NAME']
+          else:
+              version = os.environ.get('INPUT_VERSION') or 'dev-' + os.environ['GITHUB_SHA'][:12]
+          pattern = r'(?:v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?|dev-[0-9a-f]{7,40})'
+          if not re.fullmatch(pattern, version):
+              raise SystemExit('Expected a SemVer version, such as v0.1.0')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write('version=' + version + '\n')
+          PY
+      - name: Native tests
+        run: go test ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Build native CLI for integration tests
+        run: go build -o build/ ./cmd/svm
+      - name: macOS terminal and shell smoke tests
+        if: runner.os == 'macOS'
+        run: |
+          python3 tests/integration/terminal_smoke.py
+          python3 tests/integration/default_shell_smoke.py
+          python3 tests/integration/node_shell_smoke.py
+          python3 tests/integration/go_shell_smoke.py
+      - name: Unix installer tests
+        if: runner.os != 'Windows'
+        run: |
+          sh -n install.sh
+          python3 tests/integration/installer_smoke.py
+      - name: Package x64 and ARM64
+        shell: bash
+        env:
+          ARCHIVE_VERSION: ${{ steps.metadata.outputs.version }}
+          TARGET_OS: ${{ matrix.goos }}
+        run: |
+          python scripts/package_release.py --os "$TARGET_OS" --arch amd64 --version "$ARCHIVE_VERSION"
+          python scripts/package_release.py --os "$TARGET_OS" --arch arm64 --version "$ARCHIVE_VERSION"
+      - name: Include installer
+        if: matrix.target == 'linux'
+        shell: bash
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          import hashlib, shutil
+          shutil.copy2('install.sh', 'dist/install.sh')
+          digest = hashlib.sha256(Path('dist/install.sh').read_bytes()).hexdigest()
+          Path('dist/install.sh.sha256').write_text(digest + '  install.sh\n', encoding='ascii')
+          PYCODE
+      - name: Upload portable packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: svm-${{ steps.metadata.outputs.version }}-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  release:
+    name: Publish tagged release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: svm-*
+          merge-multiple: true
+          path: dist
+      - name: Verify packages and merge checksums
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root = Path('dist')
+          checksums = sorted(root.glob('*.sha256'))
+          if len(checksums) != 7:
+              raise SystemExit('Expected six platform/architecture packages and the installer')
+          lines = []
+          for checksum in checksums:
+              expected, name = checksum.read_text(encoding='ascii').strip().split('  ', 1)
+              if Path(name).name != name:
+                  raise SystemExit('Invalid archive name')
+              digest = hashlib.sha256((root / name).read_bytes()).hexdigest()
+              if digest != expected:
+                  raise SystemExit('Checksum mismatch: ' + name)
+              lines.append(expected + '  ' + name)
+          (root / 'SHA256SUMS').write_text('\n'.join(lines) + '\n', encoding='ascii')
+          PY
+      - name: Publish archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          files=(dist/*.zip dist/*.tar.gz dist/install.sh dist/install.sh.sha256 dist/SHA256SUMS)
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+          elif [[ "$RELEASE_TAG" == *-* ]]; then
+            gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes --prerelease --title "SVM $RELEASE_TAG"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" --verify-tag --generate-notes --title "SVM $RELEASE_TAG"
+          fi
