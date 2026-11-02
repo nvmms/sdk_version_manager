@@ -1,151 +1,36 @@
-# =========================
-# Qt / Qt Creator
-# =========================
-
-# Qt Creator user settings
-*.user
-*.user.*
-*.qbs.user
-*.qbs.user.*
-*.pro.user
-*.pro.user.*
-*.pri.user
-
-# Qt Creator build directories
-build/
-build-release/
-release/
-dist/
-cmake-build-*/
-out/
-
-# Qt Creator cache
-.qmake.stash
-.qmake.cache
-
-# Qt Creator session
-*.autosave
-*.creator.user
-*.creator.user.*
-
-# =========================
-# CMake
-# =========================
-
-CMakeCache.txt
-CMakeFiles/
-CMakeScripts/
-CTestTestfile.cmake
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-
-# CMake generated files
-Makefile
-*.cmake
-
-# =========================
-# Build output
-# =========================
-
-# General binaries
+# Go binaries, test output, and release artifacts
+/build/
+/dist/
+/release/
+/svm
+/svm.exe
 *.exe
-*.dll
-*.so
-*.dylib
+*.test
+*.test.exe
+*.out
+coverage/
 
-# Object files
-*.o
-*.obj
-*.lo
-*.a
-*.lib
+# Local project state
+.svm/
 
-# Debug symbols
-*.pdb
-*.ilk
-*.dSYM/
-
-# =========================
-# Qt generated files
-# =========================
-
-# MOC
-moc_*.cpp
-moc_*.h
-
-# UIC
-ui_*.h
-
-# RCC
-qrc_*.cpp
-
-# =========================
-# Visual Studio
-# =========================
-
-.vs/
-*.suo
-*.user
-*.VC.db
-*.VC.opendb
-
-# =========================
-# MinGW
-# =========================
-
-*.dll.a
-
-# =========================
-# Ninja
-# =========================
-
-.ninja_deps
-.ninja_log
-.ninja/
-
-# =========================
-# IDE
-# =========================
-
+# Editors
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# =========================
-# OS generated
-# =========================
-
-# Windows
-Thumbs.db
-Desktop.ini
-
-# macOS
+# Operating system files
 .DS_Store
 .AppleDouble
 .LSOverride
+Thumbs.db
+Desktop.ini
 
-# Linux
-*~
-
-# =========================
-# Logs
-# =========================
-
+# Logs, temporary files, and downloaded archives
 *.log
-
-# =========================
-# Temporary files
-# =========================
-
 *.tmp
 *.temp
 *.bak
-*.swp
-*.swo
-
-# =========================
-# Package files
-# =========================
-
 *.zip
 *.tar.gz

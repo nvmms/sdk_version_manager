@@ -1,0 +1,30 @@
+name: Go CLI
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -o build/ ./cmd/svm
+      - name: Terminal integration smoke test
+        if: runner.os != 'Windows'
+        run: python3 tests/integration/terminal_smoke.py
+      - name: Shell integration smoke test
+        if: runner.os != 'Windows'
+        run: python3 tests/integration/node_shell_smoke.py
+      - name: First-use shell setup acceptance test
+        if: runner.os != 'Windows'
+        run: python3 tests/integration/default_shell_smoke.py

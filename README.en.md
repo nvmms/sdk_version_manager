@@ -1,340 +1,57 @@
 # SDK Version Manager (SVM)
 
-## PostgreSQL provider
+The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. This first migration slice supports Node.js; other Providers from the Qt application have not been ported.
 
-The PostgreSQL provider discovers supported releases from the EDB binary archive
-recommended by PostgreSQL's official Windows download page, installs Windows x64
-ZIP packages into an SVM-owned program directory, and proxies `psql` through
-`svm postgresql --version`. Program installation does not initialize or delete
-database instance data.
+Requires Go 1.23+. Terminal handling uses golang.org/x/term and golang.org/x/sys (BSD-3-Clause):
 
-[简体中文](README.md) | English
-
-SDK Version Manager (SVM) is a local-first, cross-platform development environment manager built with Qt 6. It provides both a desktop GUI and the `svm` CLI for managing the SDK versions used by a project.
-
-> [!IMPORTANT]
-> SVM is currently an early-stage project (`0.1`) with a Windows-first focus. The available providers are **Node.js, Flutter, Java (Eclipse Temurin JDK), Python, PHP, and Go**. Web services, databases, and other capabilities remain on the roadmap.
-
-## Download and install
-
-1. Open [GitHub Releases](https://github.com/nvmms/sdk_version_manager/releases/latest);
-2. Download the installer for your Windows architecture:
-   - `SVM-<version>-windows-x64-setup.exe` for most Intel and AMD PCs;
-   - `SVM-<version>-windows-arm64-setup.exe` for ARM64 Windows devices;
-3. Run the installer;
-4. Launch **SDK Version Manager** from the Start menu.
-
-The default installation directory is:
-
-```text
-%LOCALAPPDATA%\Programs\SDK Version Manager
-```
-
-The installer creates a Start menu shortcut for the GUI. It does not currently add the CLI to `PATH`. To run `svm` from any terminal, add this directory to your user `PATH`:
-
-```text
-%LOCALAPPDATA%\Programs\SDK Version Manager\bin
-```
-
-Alternatively, run it by its full path:
-
-```powershell
-& "$env:LOCALAPPDATA\Programs\SDK Version Manager\bin\svm.exe" --help
-```
-
-## Usage
-
-### GUI
-
-1. Launch **SDK Version Manager**;
-2. Select Node.js or Flutter;
-3. SVM reads the local version cache first; click refresh when you need the latest index;
-4. Filter and select a version, then download and install it;
-5. Optionally set an installed version as the global default.
-
-Download and installation progress can be monitored or cancelled from the interface.
-
-### CLI
-
-Run these commands inside your project directory:
-
-```text
-# Show help
-svm --help
-
-# Initialize the project and create .svmrc and .svm/
-svm init
-
-# Bind project versions; missing versions are downloaded and installed
+```sh
+go build -o ./build/svm ./cmd/svm
+./build/svm --help
+svm install node 24.0.0
 svm use node 24.0.0
-svm use flutter 3.38.0
-
-# Show project bindings and global defaults
 svm use
-
-# Resolve and save a provider version for the current project
-svm use node
-
-# Configure or inspect project SDK paths for an IDE
-svm ide vscode
-svm ide idea
-
-# List versions from the local cache
-svm list
-svm list all node
-svm list lts node
-svm list stable flutter
-svm list downloaded node
-
-# Install Maven and automatically resolve or install a compatible Java runtime
-svm install maven 3.9.16
-svm use maven 3.9.16
-svm mvn --version
-
-# Run native commands with the project-selected SDK
+svm list node
+svm doctor
 svm node --version
 svm npm --version
-svm javac -version
-svm pip --version
-svm node app.js
-svm flutter doctor
 ```
 
-### IDE configuration
+Add the binary's directory to PATH to use `svm` directly. On Windows, name the output `svm.exe`.
 
-SVM exposes `.svm/sdks/<provider>` as the stable project-local SDK path.
-`svm use` does not guess which IDE a developer uses and does not automatically
-create `.vscode` or `.idea`. It prints setup guidance for VS Code, IntelliJ IDEA,
-and Android Studio. VS Code can use:
+Projects keep the existing `.svmrc` JSON schema (`schemaVersion: 1`, `sdks` mapping). `use node` selects the nearest project binding, global default, then newest installed version; an explicit version takes priority. Missing versions are installed automatically. Proxy commands use project bindings or global defaults, never arbitrary system executables.
 
-```json
-{
-  "dart.flutterSdkPath": ".svm/sdks/flutter",
-  "python.defaultInterpreterPath": ".svm/sdks/python",
-  "java.configuration.runtimes": [
-    {
-      "name": "JavaSE-21",
-      "path": ".svm/sdks/java",
-      "default": true
-    }
-  ]
-}
+The state directory retains the previous `appsdk_version_manager` application name under the platform's local application data directory. Override it with `SVM_HOME`. Existing Windows Node.js installations can be discovered; no old installations are deleted. Do not share a state directory across platforms or architectures.
+
+Downloads use the official Node.js HTTPS source and SHA-256 checksums. Extraction uses private staging and rejects traversal, unsafe links, and duplicate files. Installation locks prevent competing SVM installations. Configuration writes preserve unknown fields and use atomic replacement; external editors do not participate in locking, so a small concurrent-update window remains.
+
+Node.js management includes `default node [version|--clear]`, `uninstall node <version> --yes`, and proxy settings. Uninstall removes only the owned SDK installation directory; download archives and checksum caches remain. Active project bindings, global defaults, and SVM-running versions are protected. Unmarked legacy installations are not deleted. Software installed inside the SDK directory, including global npm packages there, is removed; projects and user npm configuration outside it remain intact.
+
+Run `use node <version>` or `install node <version>` to reinstall. A valid local archive plus saved official checksum is reused offline, without downloading again. Missing or invalid caches use the official source. Older caches without saved checksums may require a checksum request. Public restore and repair commands have been removed; old recovery directories are untouched.
+
+Downloads resume using HTTP Range and verify the entire SHA-256. Interrupted uninstall operations can be retried using persisted ownership records. Process-scoped locks release on exit.
+
+`use` creates a stable `.svm/sdks/node` link. The public init, shell and ide commands are temporarily disabled. Project initialization is automatic through use, and shell setup through default. env is hidden and retained only for existing shell hooks; new hooks use the internal __env protocol. Prompt hooks refresh the selected Node.js and restore the original PATH when leaving its environment. Restart the terminal after changing hooks. Bash setup handles both `.bashrc` and the effective login profile.
+
+`doctor` checks declarations, defaults, proxy configuration, SDK entry files, and the Node.js executable's reported version. Other Providers remain out of scope. Windows console, junction, and PowerShell behaviors still need native validation; PowerShell is unavailable on the current host. Unix INT/TERM/HUP forwarding is supported; Windows Ctrl+C relies on console broadcast. Recovery data and caches are not automatically purged. Archive extraction has no total-size quota. Legacy Qt proxy settings are not imported.
+
+```sh
+go test ./...
+go vet ./...
+go build ./cmd/svm
 ```
 
-Only providers present in `.svmrc` receive settings. Existing Java runtime
-entries are preserved when the SVM runtime is merged.
+See [Chinese documentation](README.md) and [contributor instructions](AGENTS.md).
 
-VS Code does not expose a universal project-level Node.js SDK setting.
-`runtimeExecutable` belongs to a specific `.vscode/launch.json` launch
-configuration and cannot be generated safely without knowing the application
-entry point. Use `svm node ...`, or point a specific debug configuration to
-`${workspaceFolder}/.svm/sdks/node/node.exe`.
+## Version lists
 
-In IntelliJ IDEA or WebStorm, set the Node interpreter under
-**Settings > Languages & Frameworks > Node.js** to
-`<project>\.svm\sdks\node\node.exe`. Android Studio does not provide Node.js
-project support by default; the same path can be used after installing an
-appropriate JavaScript/Node.js plugin.
+`svm list node` (or `svm list`) displays stable releases available for the current platform from the [official index](https://nodejs.org/dist/index.json). Installed versions are marked with ✓, alongside LTS names and release dates. Versions are sorted numerically, newest first. Installations missing from the index remain visible. Installation status reflects SVM-managed executables, not system PATH.
 
-You can also run:
+Use `svm list lts node` for LTS releases, `svm list installed node` for an offline local list, and `svm list node --refresh` to update the index. Normal queries use the cache and only fetch when missing. Failed refreshes preserve the previous cache and report the error; corrupt caches require an explicit refresh. Empty lists display a message.
 
-```powershell
-svm ide vscode
-```
+In an interactive terminal, lists open a persistent full-screen picker. Use arrows (or j/k), Page Up/Down, and Home/End to navigate; ✓ marks managed installations. Enter directly downloads and installs the selected version. While installing, the list is replaced with a dedicated progress screen. On success the picker exits and prints project binding and run instructions, without changing project bindings. Failures return to the list for retry. Esc or q exits; during installation it cancels first. Ctrl+C cancels an operation or exits when idle. Terminal modes and the previous screen are restored on exit. The viewport follows terminal resizing.
 
-to explicitly create or repair the VS Code integration without overwriting
-unrelated settings.
+Use `--plain` for a printed table. Redirected output, nonterminal input, and TERM=dumb automatically use plain output. Windows console support is cross-compiled but still needs native interaction validation.
 
-If the existing file uses JSONC features such as comments or trailing commas,
-SVM refuses to rewrite it and prints the setting to add manually.
+Setting a default with `svm default node <version>` now automatically installs or updates integration for the detected shell, including the SVM binary directory, SDK activation and prompt hooks. New terminals work without a separate shell-install step. Existing terminals receive a profile-source command. `--shell zsh|bash|powershell` explicitly chooses integration, while `--no-shell` saves configuration without modifying shell profiles. Setup failures return nonzero and report the saved default as partial completion. Zsh respects ZDOTDIR. Repeat setup is idempotent and preserves profile contents and permissions.
 
-IntelliJ IDEA and Android Studio currently do not expose a stable project-level
-Flutter SDK configuration file that SVM can safely modify. `svm ide idea` prints
-the resolved path for the project. You can also open
-**Settings > Languages & Frameworks > Flutter** and select:
-
-```text
-<project>\.svm\sdks\flutter
-```
-
-For other IDEs, point the Flutter SDK root to `.svm/sdks/flutter`. An already
-running IDE might require a window reload or restart after changing the setting.
-
-`svm use <provider> [version]` resolves versions in this order:
-
-1. An explicitly supplied version;
-2. The nearest `.svmrc` project binding;
-3. The global default;
-4. The latest installed version.
-
-The currently supported CLI provider IDs include `node`, `flutter`, `java`, `python`, `php`, `go`, `postgresql`, and `maven`. The Java
-provider reads Windows x64 Temurin JDK ZIP releases from the official Eclipse Adoptium
-API and verifies the official SHA-256 before installation.
-The Python provider reads Windows x64 installers from the official python.org API and
-also requires a valid SHA-256 before installing into SVM's managed directory.
-The PHP provider reads TS and NTS x64 ZIP releases from the official PHP for Windows
-index and verifies the official SHA-256. The build type is part of the version identity,
-for example `8.4.15-nts`; filter it in the GUI or with `svm list nts php`.
-
-Historical PHP for Windows archives appear under the `Legacy` filter. PHP does not
-publish checksums or signatures for these archived ZIP files, so the GUI requires
-confirmation before installation. The CLI prompts in an interactive terminal and
-requires `--allow-unverified-archive` otherwise. The SHA-256 recorded after download is
-only a local integrity baseline, not an official verification.
-
-The Go provider uses the complete official go.dev release index and Windows amd64 ZIP
-archives, verifies the official SHA-256, and resolves the matching `GOROOT` for
-`svm go ...`.
-
-The Maven provider reads Apache's official release history and archive ZIPs and verifies
-the official SHA-512 before installation. `svm install maven <version>` first reuses a
-compatible project-bound, global-default, or installed Java runtime; if none exists, it
-automatically installs Java 21 LTS. `svm use maven <version>` records both resolved versions
-in `.svmrc`, while `svm mvn ...` sets `JAVA_HOME`, `MAVEN_HOME`, and `PATH` only for the
-child process.
-
-## Available today
-
-- Browse, refresh, and filter Node.js and Flutter releases in the GUI;
-- Download, verify, install, and cancel SDK operations;
-- Resume partial downloads and use cached version indexes first;
-- Set global default SDK versions;
-- Bind multiple SDK versions to a project through `.svmrc`;
-- Find the nearest `.svmrc` by walking up from the current directory;
-- Run the selected SDK through either its provider or tool entry point, such as `svm node ...`, `svm npm ...`, `svm dart ...`, `svm javac ...`, `svm pip ...`, `svm mvn ...`, `svm gofmt ...`, or `svm psql ...`;
-- Print project SDK setup guidance for common IDEs from `svm use` without writing
-  IDE-specific files;
-- Explicitly merge Flutter, Python, and Java settings with `svm ide vscode`;
-- Synchronize GUI and CLI task state through a local EventBus;
-- Build Windows x64 and ARM64 installers.
-
-The download catalog shows only supported providers and the providers explicitly planned
-for the next implementation stage. Tools normally supplied by a parent SDK or project
-build system, such as Dart, Kotlin, Scala, and Groovy, and other lower-priority services
-remain in roadmap data but are hidden from the default catalog.
-
-## Download proxy
-
-`svm proxy` shows the current proxy. The setting applies to version-index and SDK download
-requests from both the GUI and CLI:
-
-```powershell
-svm proxy set http://127.0.0.1:7890
-svm proxy clear
-```
-
-Only HTTP proxies are currently supported; SOCKS5 is not supported. The proxy is stored locally.
-Proxy URLs cannot contain credentials, so secrets are not stored in plain text.
-Use `svm -v use java 17.0.19` to print the effective proxy, request URLs, HTTP status codes,
-and network errors.
-
-## Project configuration
-
-PowerShell can run `svm env powershell` to generate an activation script for the current
-directory. The current PowerShell process must evaluate that output with `Invoke-Expression`
-to update PATH and provider-specific environment variables.
-The Windows installer installs the PowerShell environment hook automatically. In new terminals,
-the hook checks the current directory and nearest `.svmrc` before each prompt, so running `svm use`
-also refreshes the environment without leaving the directory. It restores the original environment
-after leaving the project. Source builds can install the same
-hook with `svm shell install powershell`.
-
-`svm init` performs the following actions in the current directory:
-
-- Creates a commit-friendly `.svmrc`;
-- Creates `.svm/` for machine-local generated files;
-- Adds `.svm/` to `.gitignore` without duplicating it.
-- `svm use` creates `.svm/sdks/<provider>` as a project-local directory link to the
-  globally managed version. The link is rebuildable from `.svmrc` and is not the
-  source of truth for version resolution.
-- Running `svm use` without arguments also checks and repairs missing or stale
-  project-local directory links while displaying the active bindings.
-- On Windows, SVM falls back to a directory junction when symbolic-link privileges
-  are unavailable, without requiring administrator access.
-
-Example `.svmrc`:
-
-```json
-{
-  "schemaVersion": 1,
-  "sdks": {
-    "flutter": "3.38.0",
-    "node": "24.0.0"
-  }
-}
-```
-
-The configuration stores provider/version bindings only, never machine-specific absolute installation paths. Project bindings take precedence over global defaults.
-
-## Build from source
-
-### Requirements
-
-- Windows 10/11;
-- Qt 6.10 or a compatible version with Qt Quick, Qt Network, and Qt Concurrent;
-- CMake 3.16 or newer;
-- A C++17 compiler (Visual Studio 2022 is recommended).
-
-Clone and build:
-
-```powershell
-git clone https://github.com/nvmms/sdk_version_manager.git
-cd sdk_version_manager
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64
-cmake --build build --config Release --parallel
-```
-
-The build produces:
-
-- `appsdk_version_manager`: desktop GUI;
-- `svm`: command-line tool.
-
-### Create a release directory
-
-```powershell
-cmake --install build --config Release --prefix release
-```
-
-This deploys the applications, Qt runtime libraries, and required plugins to `release/`.
-
-### Package the Windows installer
-
-Install [NSIS](https://nsis.sourceforge.io/) first, then run the following from the repository root:
-
-```powershell
-New-Item -ItemType Directory -Force dist
-makensis `
-  "/DAPP_VERSION=0.1.0" `
-  "/DAPP_ARCH=x64" `
-  "/DRELEASE_DIR=$((Resolve-Path release).Path)" `
-  "/DOUTPUT_FILE=$((Resolve-Path dist).Path)\SVM-0.1.0-windows-x64-setup.exe" `
-  "installer/windows/installer.nsi"
-```
-
-`APP_VERSION` must contain exactly three numeric parts. For ARM64, configure CMake with `-A ARM64` and set `APP_ARCH` to `arm64`. Pushing a `v*` tag also triggers GitHub Actions to build x64 and ARM64 installers and publish them to Releases.
-
-## Repository layout
-
-```text
-.
-├── cli/                         # svm CLI entry point
-├── installer/windows/           # NSIS Windows installer
-├── src/                         # Provider controller and local EventBus
-├── Main.qml                     # Desktop interface
-├── ProviderCatalog.js           # Provider presentation metadata
-├── main.cpp                     # GUI entry point
-└── CMakeLists.txt               # Build configuration
-```
-
-## Roadmap
-
-- Establish Provider, Operation, InstalledVersion, and PlatformAdapter abstractions;
-- Continue extracting common provider interfaces;
-- Add CLI commands such as `install` and `doctor`;
-- Improve recovery, cancellation, health checks, and automated tests;
-- Expand into Nginx, databases, and local services after the SDK MVP is stable;
-- Complete macOS and Linux support.
-
-## Contributing
-
-Read [`AGENTS.md`](AGENTS.md) before contributing. New features should keep the GUI and CLI on shared core logic and follow the project's requirements for safe downloads, atomic configuration writes, structured process arguments, and user data protection.
+The fresh-home acceptance test `python3 tests/integration/default_shell_smoke.py` verifies default selection followed by a new shell, without manually installing hooks or evaluating environment scripts.
