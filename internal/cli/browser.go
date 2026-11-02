@@ -130,7 +130,12 @@ func browse(ctx context.Context, dir string, m *sdk.Manager, provider string, ve
 	completedVersion := ""
 	defer func() {
 		if completedVersion != "" {
-			fmt.Fprintf(out, "Installed %s %s.\n\nUse in this project:\n  svm use %s %s\n\nRun commands:\n  svm node --version\n  svm npm --version\n", provider, completedVersion, provider, completedVersion)
+			fmt.Fprintf(out, "Installed %s %s.\n\nUse in this project:\n  svm use %s %s\n\nRun commands:\n", provider, completedVersion, provider, completedVersion)
+			if provider == "go" {
+				fmt.Fprintln(out, "  svm go version\n  svm go env GOROOT")
+			} else {
+				fmt.Fprintln(out, "  svm node --version\n  svm npm --version")
+			}
 		}
 	}()
 	defer func() {

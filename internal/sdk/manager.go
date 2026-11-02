@@ -77,7 +77,7 @@ func New() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Manager{Root: root, Providers: []Provider{Node{}}}, nil
+	return &Manager{Root: root, Providers: []Provider{Node{}, Go{}}}, nil
 }
 func (m *Manager) Entry(name string) (Provider, Entry, bool) {
 	for _, p := range m.Providers {

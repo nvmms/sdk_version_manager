@@ -18,7 +18,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("SVM_TEST_CHILD") == "1" {
 		dir, _ := os.Getwd()
 		input, _ := io.ReadAll(os.Stdin)
-		json.NewEncoder(os.Stdout).Encode(map[string]any{"args": os.Args[1:], "dir": dir, "input": string(input), "path": os.Getenv("PATH")})
+		json.NewEncoder(os.Stdout).Encode(map[string]any{"args": os.Args[1:], "dir": dir, "input": string(input), "path": os.Getenv("PATH"), "goroot": os.Getenv("GOROOT"), "toolchain": os.Getenv("GOTOOLCHAIN")})
 		os.Stderr.WriteString("child diagnostic")
 		os.Exit(17)
 	}
@@ -74,5 +74,55 @@ func TestProxyContract(t *testing.T) {
 	}
 	if os.Getenv("PATH") != original {
 		t.Fatal("parent environment changed")
+	}
+}
+
+func TestGoProxyPinsGOROOTAndToolchain(t *testing.T) {
+	m := &Manager{Root: t.TempDir(), Providers: []Provider{Node{}, Go{}}}
+	dir := t.TempDir()
+	source, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, _ := (Go{}).Entry("go")
+	target := filepath.Join(m.Directory("go", "1.27.3"), entry.Executable)
+	os.MkdirAll(filepath.Dir(target), 0755)
+	src, err := os.Open(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = io.Copy(dst, src)
+	dst.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rc, _ := config.Init(dir)
+	config.Bind(rc, "go", "1.27.3")
+	t.Setenv("SVM_TEST_CHILD", "1")
+	t.Setenv("GOROOT", "old-root")
+	t.Setenv("GOTOOLCHAIN", "auto")
+	args := []string{"env", "argument with spaces", ""}
+	var out, diagnostics bytes.Buffer
+	code, err := m.Run(context.Background(), dir, "go", args, strings.NewReader(""), &out, &diagnostics)
+	if err != nil || code != 17 {
+		t.Fatal(code, err, diagnostics.String())
+	}
+	var result struct {
+		Args              []string
+		GOROOT, Toolchain string
+	}
+	if err = json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(result.Args, args) || result.GOROOT != m.Directory("go", "1.27.3") || result.Toolchain != "local" {
+		t.Fatal(result)
+	}
+	if os.Getenv("GOROOT") != "old-root" || os.Getenv("GOTOOLCHAIN") != "auto" {
+		t.Fatal("changed parent environment")
 	}
 }

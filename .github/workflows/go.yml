@@ -28,3 +28,6 @@ jobs:
       - name: First-use shell setup acceptance test
         if: runner.os != 'Windows'
         run: python3 tests/integration/default_shell_smoke.py
+      - name: Go and Node shell activation test
+        if: runner.os != 'Windows'
+        run: python3 tests/integration/go_shell_smoke.py

@@ -187,3 +187,35 @@ func TestPausedCommandSurface(t *testing.T) {
 		}
 	}
 }
+
+func TestGoCommandsUseSharedWorkflow(t *testing.T) {
+	m := &sdk.Manager{Root: t.TempDir(), Providers: []sdk.Provider{sdk.Node{}, sdk.Go{}}}
+	dir := t.TempDir()
+	entry, _ := (sdk.Go{}).Entry("go")
+	exe := filepath.Join(m.Directory("go", "1.27.3"), entry.Executable)
+	os.MkdirAll(filepath.Dir(exe), 0755)
+	os.WriteFile(exe, []byte("fixture"), 0755)
+	for _, tc := range []struct {
+		args []string
+		code int
+	}{
+		{[]string{"list", "installed", "go", "--plain"}, 0},
+		{[]string{"list", "lts", "go"}, 2},
+		{[]string{"use", "go", "1.27.3"}, 0},
+		{[]string{"use", "go"}, 0},
+		{[]string{"use"}, 0},
+		{[]string{"default", "go", "1.27.3", "--no-shell"}, 0},
+		{[]string{"default", "go"}, 0},
+		{[]string{"use", "go", "1.27.3", "--global", "--no-shell"}, 0},
+		{[]string{"default", "go", "--clear", "--no-shell"}, 0},
+	} {
+		var out, diagnostics bytes.Buffer
+		if code := Run(context.Background(), tc.args, dir, m, nil, &out, &diagnostics); code != tc.code {
+			t.Fatal(tc.args, code, diagnostics.String())
+		}
+	}
+	p, err := config.Read(filepath.Join(dir, ".svmrc"))
+	if err != nil || p.SDKs["go"] != "1.27.3" {
+		t.Fatal(p, err)
+	}
+}

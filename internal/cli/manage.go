@@ -21,8 +21,8 @@ func manage(ctx context.Context, command string, args []string, dir string, m *s
 	case "default":
 		return setDefault(args, m, out)
 	case "uninstall":
-		if len(args) != 3 || args[0] != "node" || args[2] != "--yes" {
-			return 2, errors.New("usage: svm uninstall node <version> --yes; removes the owned SDK installation, preserves project declarations and downloads")
+		if len(args) != 3 || !m.Supports(args[0]) || args[2] != "--yes" {
+			return 2, errors.New("usage: svm uninstall <node|go> <version> --yes; removes the owned SDK installation, preserves project declarations and downloads")
 		}
 		path, err := m.Uninstall(args[0], args[1], dir)
 		if err != nil {
@@ -31,7 +31,7 @@ func manage(ctx context.Context, command string, args []string, dir string, m *s
 		if path == "" {
 			fmt.Fprintln(out, "Already uninstalled.")
 		} else {
-			fmt.Fprintf(out, "Uninstalled node %s. Download cache preserved.\nReinstall with: svm use node %s\nOther projects may still reference this version.\n", args[1], args[1])
+			fmt.Fprintf(out, "Uninstalled %s %s. Download cache preserved.\nReinstall with: svm use %s %s\nOther projects may still reference this version.\n", args[0], args[1], args[0], args[1])
 		}
 		return 0, nil
 	case "proxy":
@@ -112,9 +112,6 @@ func doctor(ctx context.Context, args []string, dir string, m *sdk.Manager, out 
 		return 2, errors.New("usage: svm doctor")
 	}
 	fmt.Fprintln(out, "State:", m.Root)
-	if path, err := exec.LookPath("node"); err == nil {
-		fmt.Fprintln(out, "Node on PATH (discovery only):", path)
-	}
 	defaults, err := m.Defaults()
 	if err != nil {
 		return 1, err
@@ -122,65 +119,65 @@ func doctor(ctx context.Context, args []string, dir string, m *sdk.Manager, out 
 	if _, err = m.Proxy(); err != nil {
 		return 1, err
 	}
-	needed := map[string]bool{}
-	if v := defaults["node"]; v != "" {
-		needed[v] = true
-		fmt.Fprintln(out, "Global node:", v)
-	}
-	path, err := config.Find(dir)
-	if err == nil {
-		project, e := config.Read(path)
+	bindings := map[string]string{}
+	if path, e := config.Find(dir); e == nil {
+		p, e := config.Read(path)
 		if e != nil {
 			return 1, e
 		}
+		bindings = p.SDKs
 		fmt.Fprintln(out, "Project:", path)
-		for p, v := range project.SDKs {
-			if p != "node" {
-				fmt.Fprintln(out, "Not migrated:", p)
-				continue
-			}
+	} else if !errors.Is(e, os.ErrNotExist) {
+		return 1, e
+	} else {
+		fmt.Fprintln(out, "No project declaration; run svm use <provider> <version> to initialize it.")
+	}
+	for p := range bindings {
+		if !m.Supports(p) {
+			fmt.Fprintln(out, "Not migrated:", p)
+		}
+	}
+	failed := false
+	for _, p := range m.Providers {
+		id := p.ID()
+		if path, e := exec.LookPath(id); e == nil {
+			fmt.Fprintln(out, id, "on PATH (discovery only):", path)
+		}
+		needed := map[string]bool{}
+		if v := defaults[id]; v != "" {
+			needed[v] = true
+			fmt.Fprintln(out, "Global", id+":", v)
+		}
+		if v := bindings[id]; v != "" {
 			needed[v] = true
 		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return 1, err
-	} else {
-		fmt.Fprintln(out, "No project declaration; run svm use node <version> to initialize it.")
-	}
-	installed, err := m.Versions("node")
-	if err != nil {
-		return 1, err
-	}
-	for _, v := range installed {
-		needed[v] = true
-	}
-	// Include interrupted installs whose executable is absent.
-	entries, err := os.ReadDir(filepath.Join(m.Root, "installs", "node"))
-	if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return 1, err
-	}
-	for _, entry := range entries {
-		if entry.IsDir() && config.SafeName(entry.Name()) && entry.Name()[0] != '.' {
-			needed[entry.Name()] = true
+		entries, e := os.ReadDir(filepath.Join(m.Root, "installs", id))
+		if e != nil && !errors.Is(e, os.ErrNotExist) {
+			return 1, e
 		}
-	}
-	versions := make([]string, 0, len(needed))
-	for v := range needed {
-		versions = append(versions, v)
-	}
-	sort.Strings(versions)
-	failed := false
-	for _, v := range versions {
-		if err = m.Health(ctx, v); err != nil {
-			fmt.Fprintln(out, "FAIL:", err)
-			failed = true
-		} else {
-			fmt.Fprintln(out, "OK: node", v, m.Directory("node", v))
+		for _, entry := range entries {
+			if entry.IsDir() && config.SafeName(entry.Name()) && !strings.HasPrefix(entry.Name(), ".") {
+				needed[entry.Name()] = true
+			}
+		}
+		versions := make([]string, 0, len(needed))
+		for v := range needed {
+			versions = append(versions, v)
+		}
+		sort.Strings(versions)
+		for _, v := range versions {
+			if err = m.HealthFor(ctx, id, v); err != nil {
+				fmt.Fprintln(out, "FAIL:", err)
+				failed = true
+			} else {
+				fmt.Fprintln(out, "OK:", id, v, m.Directory(id, v))
+			}
 		}
 	}
 	if failed {
-		return 3, errors.New("Node.js health checks failed; use the reinstall commands above")
+		return 3, errors.New("SDK health checks failed; use the reinstall commands above")
 	}
-	fmt.Fprintln(out, "Node.js checks passed.")
+	fmt.Fprintln(out, "SDK checks passed.")
 	return 0, nil
 }
 
@@ -197,7 +194,7 @@ func activationHint(out io.Writer) {
 			shell = "bash"
 		}
 	}
-	fmt.Fprintln(out, "\nThe default is saved. Activate this terminal to use node/npm directly:")
+	fmt.Fprintln(out, "\nRefresh this terminal to apply the selected SDK environment:")
 	if shell == "powershell" {
 		quoted := "'" + strings.ReplaceAll(executable, "'", "''") + "'"
 		fmt.Fprintf(out, "  & %s __env powershell | Out-String | Invoke-Expression\n", quoted)
@@ -224,8 +221,8 @@ func currentShell() string {
 	return "bash"
 }
 func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
-	const usage = "usage: svm default node [version|--clear] [--shell bash|zsh|powershell | --no-shell]"
-	if len(args) == 0 || args[0] != "node" {
+	const usage = "usage: svm default <node|go> [version|--clear] [--shell bash|zsh|powershell | --no-shell]"
+	if len(args) == 0 || !m.Supports(args[0]) {
 		return 2, errors.New(usage)
 	}
 	if len(args) == 1 {
@@ -233,11 +230,11 @@ func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
 		if err != nil {
 			return 1, err
 		}
-		v := defaults["node"]
+		v := defaults[args[0]]
 		if v == "" {
 			v = "(not set)"
 		}
-		fmt.Fprintln(out, "Global node:", v)
+		fmt.Fprintf(out, "Global %s: %s\n", args[0], v)
 		return 0, nil
 	}
 	version := args[1]
@@ -271,24 +268,26 @@ func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
 	if version == "--clear" {
 		version = ""
 	}
-	if err := m.SetDefault("node", version); err != nil {
+	if err := m.SetDefault(args[0], version); err != nil {
 		return 1, err
 	}
 	if version == "" {
-		fmt.Fprintln(out, "Global node default cleared. Project bindings still take priority.")
-		activationHint(out)
+		fmt.Fprintln(out, "Global default cleared. Project bindings still take priority.")
+		if !noShell {
+			activationHint(out)
+		}
 		return 0, nil
 	}
 	if noShell {
-		fmt.Fprintln(out, "Global node:", version)
-		fmt.Fprintln(out, "Shell setup skipped (--no-shell). Use svm node ... or explicitly activate the shell.")
+		fmt.Fprintf(out, "Global %s: %s\n", args[0], version)
+		fmt.Fprintln(out, "Shell setup skipped (--no-shell). Use svm <provider> ... or explicitly activate the shell.")
 		return 0, nil
 	}
 	profile, err := m.ShellHook(shell, true)
 	if err != nil {
-		return 1, fmt.Errorf("global default saved, but shell setup failed: %w; retry svm default node %s --shell %s", err, version, shell)
+		return 1, fmt.Errorf("global default saved, but shell setup failed: %w; retry svm default %s %s --shell %s", err, args[0], version, shell)
 	}
-	fmt.Fprintln(out, "Global node:", version)
+	fmt.Fprintf(out, "Global %s: %s\n", args[0], version)
 	fmt.Fprintf(out, "Shell integration ready: %s (%s)\n", shell, profile)
 	fmt.Fprintln(out, "Open a new terminal, or load the profile in this terminal:")
 	if shell == "powershell" {
@@ -296,7 +295,11 @@ func setDefault(args []string, m *sdk.Manager, out io.Writer) (int, error) {
 	} else {
 		fmt.Fprintf(out, "  source '%s'\n", strings.ReplaceAll(profile, "'", `'\''`))
 	}
-	fmt.Fprintln(out, "Then run: node --version")
+	if args[0] == "go" {
+		fmt.Fprintln(out, "Then run: go version")
+	} else {
+		fmt.Fprintln(out, "Then run: node --version")
+	}
 	fmt.Fprintln(out, "Project bindings take priority over the global default.")
 	return 0, nil
 }

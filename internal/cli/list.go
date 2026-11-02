@@ -34,18 +34,24 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 				filter = "installed"
 			}
 			haveFilter = true
-		case "node":
+		case "node", "go":
 			if haveProvider {
 				return 2, errors.New("specify only one Provider")
 			}
 			provider = arg
 			haveProvider = true
 		default:
-			return 2, fmt.Errorf("unsupported list argument %q; usage: svm list [all|lts|installed] [node] [--refresh] [--plain] (currently only node is migrated)", arg)
+			return 2, fmt.Errorf("unsupported list argument %q; usage: svm list [all|lts|installed] [node|go] [--refresh] [--plain] (supported Providers: node, go)", arg)
 		}
 	}
 	if filter == "installed" && refresh {
 		return 2, errors.New("--refresh cannot be combined with the offline installed filter")
+	}
+	if !m.Supports(provider) {
+		return 2, fmt.Errorf("unsupported Provider %s", provider)
+	}
+	if provider == "go" && filter == "lts" {
+		return 2, errors.New("Go does not define an LTS channel; use svm list go")
 	}
 	var versions []sdk.Version
 	if filter == "installed" {
@@ -57,7 +63,7 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 			versions = append(versions, sdk.Version{Number: v, Installed: true})
 		}
 	} else {
-		fmt.Fprintln(diagnostics, "Loading Node.js versions (cache first; --refresh updates the official index)…")
+		fmt.Fprintf(diagnostics, "Loading %s versions (cache first; --refresh updates the official index)…\n", provider)
 		var err error
 		versions, err = m.Catalog(ctx, provider, refresh)
 		if err != nil {
@@ -92,7 +98,7 @@ func list(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.
 		return 1, err
 	}
 	if count == 0 {
-		fmt.Fprintln(out, "No matching versions. Install with: svm install node <version>")
+		fmt.Fprintf(out, "No matching versions. Install with: svm install %s <version>\n", provider)
 	} else {
 		fmt.Fprintf(out, "\n%d versions, %d installed (✓).\n", count, installedCount)
 	}

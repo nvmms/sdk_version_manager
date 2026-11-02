@@ -35,12 +35,12 @@ def session_setup():
     os.tcsetpgrp(0, os.getpgrp())
 
 
-def check_session(state, project, steps, exit_key):
+def check_session(state, project, steps, exit_key, provider="node"):
     master, slave = pty.openpty()
     os.set_blocking(master, False)
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 18, 90, 0, 0))
     process = subprocess.Popen(
-        [sys.executable, "-c", WRAPPER, BINARY, "list", "node"],
+        [sys.executable, "-c", WRAPPER, BINARY, "list", provider],
         stdin=slave, stdout=slave, stderr=slave, cwd=project,
         env=dict(os.environ, SVM_HOME=str(state), TERM="xterm-256color"),
         preexec_fn=session_setup,
@@ -125,3 +125,25 @@ with tempfile.TemporaryDirectory(prefix="svm-terminal-") as root:
     )
     assert b"\x1b" not in result.stdout and b"40 versions" in result.stdout
 print("PASS: paging, selection, direct install, usage instructions, exit, restoration and plain output")
+
+# Go uses the same picker and Enter-to-install workflow without Node-specific output.
+import platform
+with tempfile.TemporaryDirectory(prefix="svm-go-terminal-") as root:
+    state, project = Path(root) / "state", Path(root) / "project"
+    project.mkdir()
+    host_os = "darwin" if sys.platform == "darwin" else "linux"
+    host_arch = "arm64" if platform.machine() in ("arm64", "aarch64") else "amd64"
+    cache = state / "cache/go/versions.json"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(json.dumps([
+        {"version": f"go1.27.{i}", "stable": True, "files": [
+            {"filename": f"go1.27.{i}.{host_os}-{host_arch}.tar.gz", "os": host_os,
+             "arch": host_arch, "kind": "archive", "sha256": "0" * 64, "size": 1}
+        ]} for i in range(40)
+    ]))
+    executable = state / "installs/go/1.27.39/bin/go"
+    executable.parent.mkdir(parents=True)
+    executable.write_text("fixture; never executed")
+    executable.chmod(0o755)
+    check_session(state, project, [(b"\r", b"svm use go 1.27.39")], None, provider="go")
+print("PASS: Go picker direct install, Go-specific usage and terminal restoration")

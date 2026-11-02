@@ -19,19 +19,19 @@ import (
 
 const help = `SVM — SDK Version Manager (Go CLI)
 Usage:
-  svm use [node [version]]
-  svm install node <version>
-  svm list [all|lts|installed] [node] [--refresh] [--plain]
-  svm default node [version|--clear] [--shell bash|zsh|powershell | --no-shell]
-  svm uninstall node <version> --yes
+  svm use [provider [version]]
+  svm install <node|go> <version>
+  svm list [all|lts|installed] [node|go] [--refresh] [--plain]
+  svm default <node|go> [version|--clear] [--shell bash|zsh|powershell | --no-shell]
+  svm uninstall <node|go> <version> --yes
   svm proxy [show|set <http-url>|clear]
   svm doctor
-  svm <node|npm|npx|corepack> [arguments...]
+  svm <node|npm|npx|corepack|go|gofmt> [arguments...]
 
 use queries or sets the current project version. Selection order:
 explicit version, nearest .svmrc, global default, newest installed version.
 Missing versions are installed automatically. No noninteractive prompts.
-SVM_HOME overrides the local state directory. This migration currently supports Node.js.
+SVM_HOME overrides the local state directory. This migration currently supports Node.js and Go.
 `
 
 func Run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.Reader, out, diagnostics io.Writer) int {
@@ -67,10 +67,10 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 	}
 	switch command {
 	case "install":
-		if len(rest) != 2 || rest[0] != "node" {
-			return 2, errors.New("usage: svm install node <version>; other Providers are not migrated yet")
+		if len(rest) != 2 || !m.Supports(rest[0]) {
+			return 2, errors.New("usage: svm install <node|go> <version>; supported Providers: node, go")
 		}
-		return result(m.InstallNode(ctx, rest[1], diagnostics))
+		return result(m.Install(ctx, rest[0], rest[1], diagnostics))
 	case "list":
 		return list(ctx, rest, dir, m, in, out, diagnostics)
 	case "use":
@@ -78,8 +78,8 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 			forwarded := append(append([]string{}, rest[:2]...), rest[3:]...)
 			return manage(ctx, "default", forwarded, dir, m, out, diagnostics)
 		}
-		if len(rest) > 2 || len(rest) > 0 && rest[0] != "node" {
-			return 2, errors.New("usage: svm use [node [version]]; other Providers are not migrated yet")
+		if len(rest) > 2 || len(rest) > 0 && !m.Supports(rest[0]) {
+			return 2, errors.New("usage: svm use [provider [version]]; supported Providers: node, go")
 		}
 		if len(rest) == 0 {
 			path, err := config.Find(dir)
@@ -96,7 +96,7 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 				sort.Strings(keys)
 				for _, k := range keys {
 					fmt.Fprintln(out, k, p.SDKs[k])
-					if k == "node" && m.Installed(k, p.SDKs[k]) {
+					if m.Supports(k) && m.Installed(k, p.SDKs[k]) {
 						if err := m.ProjectLink(filepath.Dir(path), k, p.SDKs[k]); err != nil {
 							return 1, err
 						}
@@ -121,17 +121,18 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 			}
 			return 0, nil
 		}
+		provider := rest[0]
 		var version string
 		if len(rest) == 2 {
 			version = rest[1]
 		} else {
 			var err error
-			version, _, err = m.Resolve(dir, "node", true)
+			version, _, err = m.Resolve(dir, provider, true)
 			if errors.Is(err, sdk.ErrNoVersion) && terminal.Supported(in, out) {
-				fmt.Fprint(diagnostics, "Enter an exact Node.js version (e.g. 24.0.0): ")
+				fmt.Fprintf(diagnostics, "Enter an exact %s version: ", provider)
 				scanner := bufio.NewScanner(in)
 				if !scanner.Scan() {
-					return 3, errors.New("no version entered; run svm use node <version>")
+					return 3, fmt.Errorf("no version entered; run svm use %s <version>", provider)
 				}
 				version = strings.TrimSpace(scanner.Text())
 				err = nil
@@ -151,8 +152,8 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return 1, err
 		}
-		if !m.Installed("node", version) {
-			if err = m.InstallNode(ctx, version, diagnostics); err != nil {
+		if !m.Installed(provider, version) {
+			if err = m.Install(ctx, provider, version, diagnostics); err != nil {
 				return 1, err
 			}
 		}
@@ -165,13 +166,13 @@ func run(ctx context.Context, args []string, dir string, m *sdk.Manager, in io.R
 		if _, err = config.Init(filepath.Dir(path)); err != nil {
 			return 1, err
 		}
-		if err = config.Bind(path, "node", version); err != nil {
+		if err = config.Bind(path, provider, version); err != nil {
 			return 1, err
 		}
-		if err = m.ProjectLink(filepath.Dir(path), "node", version); err != nil {
-			return 1, fmt.Errorf("project version saved, but SDK link failed: %w; retry svm use node", err)
+		if err = m.ProjectLink(filepath.Dir(path), provider, version); err != nil {
+			return 1, fmt.Errorf("project version saved, but SDK link failed: %w; retry svm use %s", err, provider)
 		}
-		fmt.Fprintf(out, "Project: %s\nnode %s\n", path, version)
+		fmt.Fprintf(out, "Project: %s\n%s %s\n", path, provider, version)
 		return 0, nil
 	case "default", "uninstall", "proxy":
 		return manage(ctx, command, rest, dir, m, out, diagnostics)

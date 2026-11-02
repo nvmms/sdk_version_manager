@@ -33,12 +33,15 @@ type nodeRelease struct {
 
 // Catalog reads the cached official index. Only a missing cache or explicit refresh uses the network.
 func (m *Manager) Catalog(ctx context.Context, provider string, refresh bool) ([]Version, error) {
-	if provider != "node" {
-		return nil, fmt.Errorf("Provider %q is not migrated yet; currently supported: node", provider)
+	if !m.Supports(provider) {
+		return nil, fmt.Errorf("Provider %q is not migrated yet; currently supported: node, go", provider)
 	}
 	client, err := m.Client(30 * time.Second)
 	if err != nil {
 		return nil, err
+	}
+	if provider == "go" {
+		return m.goCatalog(ctx, refresh, client, "https://go.dev/dl/?mode=json&include=all")
 	}
 	return m.nodeCatalog(ctx, refresh, client, "https://nodejs.org/dist/index.json")
 }

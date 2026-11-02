@@ -12,8 +12,8 @@ import (
 )
 
 func (m *Manager) ProjectLink(project, provider, version string) error {
-	if provider != "node" || !nodeVersion.MatchString(version) {
-		return errors.New("invalid Node.js binding")
+	if !m.Supports(provider) || !ValidVersion(provider, version) {
+		return errors.New("invalid SDK binding")
 	}
 	if !m.Installed(provider, version) {
 		return fmt.Errorf("SDK missing; run svm install %s %s", provider, version)

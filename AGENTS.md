@@ -6,7 +6,7 @@
 
 项目为 SDK Version Manager，命令固定为 `svm`，本地优先，Windows 优先并保持 macOS、Linux 可移植。
 先完成 SDK 管理，再考虑站点、数据库和服务。数据库软件卸载与用户数据删除必须分离。
-Go 迁移按 Provider 逐个恢复，当前仅支持 Node.js；不得将旧版其他 Provider 宣称为已迁移。
+Go 迁移按 Provider 逐个恢复，当前支持 Node.js 和 Go；不得将旧版其他 Provider 宣称为已迁移。
 不引入 GUI、云账号、远程部署、容器编排或任意脚本市场。
 
 ## 技术与结构

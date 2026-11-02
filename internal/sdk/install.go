@@ -100,38 +100,53 @@ func (m *Manager) installNodeLocked(ctx context.Context, version, base string, c
 	if err = config.Atomic(checksumPath, checksums); err != nil {
 		return err
 	}
-	fmt.Fprintln(progress, "Checksum verified; extracting…")
+	return m.publishArchive(ctx, "node", version, name, partial, strings.TrimSuffix(name, suffix), url+name, expected, progress)
+}
+
+// publishArchive is the common validated extraction/publish step for archive Providers.
+func (m *Manager) publishArchive(ctx context.Context, provider, version, name, archive, archiveRoot, source, checksum string, out io.Writer) error {
+	root, err := m.stateDirectory("installs", provider)
+	if err != nil {
+		return err
+	}
+	destination := filepath.Join(root, version)
+	fmt.Fprintln(out, "Checksum verified; extracting…")
 	staging, err := os.MkdirTemp(root, ".extracting-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(staging)
-	if suffix == ".zip" {
-		err = extractZip(ctx, partial, staging)
+	if strings.HasSuffix(name, ".zip") {
+		err = extractZip(ctx, archive, staging)
 	} else {
-		err = extractTar(ctx, partial, staging)
+		err = extractTar(ctx, archive, staging)
 	}
 	if err != nil {
 		return err
 	}
-	extracted := filepath.Join(staging, strings.TrimSuffix(name, suffix))
-	entry, _ := (Node{}).Entry("node")
-	if info, err := os.Stat(filepath.Join(extracted, entry.Executable)); err != nil || !info.Mode().IsRegular() {
-		return errors.New("archive does not contain the expected Node.js executable")
+	extracted := filepath.Join(staging, archiveRoot)
+	_, entry, ok := m.Entry(provider)
+	if !ok {
+		return errors.New("Provider entry point missing")
 	}
-	if err := ctx.Err(); err != nil {
+	info, err := os.Stat(filepath.Join(extracted, entry.Executable))
+	if err != nil || !info.Mode().IsRegular() {
+		return fmt.Errorf("archive does not contain the expected %s executable", provider)
+	}
+	if err = ctx.Err(); err != nil {
 		return err
 	}
-	record := map[string]any{"schemaVersion": 1, "provider": "node", "version": version, "os": runtime.GOOS, "arch": runtime.GOARCH, "source": url + name, "sha256": expected}
-	if err := config.Write(filepath.Join(extracted, ".svm-install.json"), record); err != nil {
+	record := map[string]any{"schemaVersion": 1, "provider": provider, "version": version, "os": runtime.GOOS, "arch": runtime.GOARCH, "source": source, "sha256": checksum}
+	if err = config.Write(filepath.Join(extracted, ".svm-install.json"), record); err != nil {
 		return err
 	}
-	if err := os.Rename(extracted, destination); err != nil {
+	if err = os.Rename(extracted, destination); err != nil {
 		return err
 	}
-	fmt.Fprintf(progress, "Installed node %s: %s\n", version, destination)
+	fmt.Fprintf(out, "Installed %s %s: %s\n", provider, version, destination)
 	return nil
 }
+
 func fetch(ctx context.Context, client *http.Client, url string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

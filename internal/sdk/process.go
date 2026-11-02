@@ -51,9 +51,12 @@ func (m *Manager) Run(ctx context.Context, dir, name string, args []string, stdi
 	// Replace PATH rather than appending a second key (Windows keys are case insensitive).
 	for _, v := range os.Environ() {
 		key, _, _ := strings.Cut(v, "=")
-		if !strings.EqualFold(key, "PATH") {
+		if !strings.EqualFold(key, "PATH") && !(provider.ID() == "go" && (strings.EqualFold(key, "GOROOT") || strings.EqualFold(key, "GOTOOLCHAIN"))) {
 			command.Env = append(command.Env, v)
 		}
+	}
+	if provider.ID() == "go" {
+		command.Env = append(command.Env, "GOROOT="+root, "GOTOOLCHAIN=local")
 	}
 	command.Env = append(command.Env, "PATH="+filepath.Dir(executable)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	signals := make(chan os.Signal, 1)

@@ -1,6 +1,6 @@
 # SDK Version Manager（SVM）
 
-`go` 分支将 SVM 迁移为纯 Go 命令行工具，不依赖 Qt 或 GUI。当前为迁移首阶段，已实现 Node.js 管理；旧 Qt 实现在原分支保留。
+`go` 分支将 SVM 迁移为纯 Go 命令行工具，不依赖 Qt 或 GUI。当前为迁移首阶段，已实现 Node.js 和 Go 管理；旧 Qt 实现在原分支保留。
 
 ## 构建与使用
 
@@ -55,6 +55,30 @@ svm list node --refresh       # 主动更新官方版本索引
 版本来自 [Node.js 官方发行索引](https://nodejs.org/dist/index.json)，按版本数字从新到旧排序，显示 LTS 名称、发布日期和本机安装标记。仅显示当前系统/架构有发行包的正式版本，并保留索引之外的本机安装。尚不支持安装的预发布版本不会列出。
 
 普通查询优先使用 `cache/node/versions.json`，只有缓存不存在才联网；`--refresh` 强制更新，下载或解析失败保留原缓存并报错。损坏的缓存需要显式刷新修复。已安装标记实时检查 SVM 安装目录，不标记系统 PATH 或其他管理器的安装。空列表会显示提示；无缓存且网络失败时，可以使用 `list installed node`。
+
+## Go Provider
+
+```sh
+svm list go                    # 当前平台的正式版本；上下选择，Enter 安装
+svm list installed go          # 仅本机已安装版本
+svm list go --refresh          # 刷新完整官方索引
+svm install go 1.27.3
+svm use go 1.27.3              # 项目绑定；缺少安装时优先复用本地包
+svm default go 1.27.3          # 全局默认，并自动配置 Shell 接入
+svm go version
+svm go env GOROOT
+svm go run main.go
+svm gofmt -w main.go
+svm uninstall go 1.27.3 --yes   # 保留版本索引和下载包
+```
+
+Go 从 [官方完整发行索引](https://go.dev/dl/?mode=json&include=all) 读取正式版本、归档文件和 SHA-256。按系统与 CPU 架构选择 `.zip` 或 `.tar.gz`，不使用系统安装程序，不需要管理员权限。版本参数不带 `go` 前缀，例如 `1.27.3`；官方发布过的 `1.20` 这类两段版本也可使用。不展示预发布或缺少适配归档的版本；Go 没有 LTS 通道，`list lts go` 会明确报错。
+
+Go 复用 Node.js 的下载续传、校验、私有解压、原子发布、文件锁和卸载保护。索引和完整下载包都保留时，可离线重新 `use`，不会再次下载。Go 安装保存在 `installs/go/<version>`，解包后使用归档中的 `go` 根目录。
+
+项目可同时绑定 Node.js 与 Go。Shell 激活会一次构造两个 SDK 的 PATH，设置并在离开环境时恢复 `GOROOT` 与 `GOTOOLCHAIN`，不修改 `GOPATH`。`svm go`、`svm gofmt` 始终执行所选安装中的入口；为防止 Go 自行下载并切换到另一个编译器，使用 `GOTOOLCHAIN=local`。项目需要更高工具链时，通过 SVM 显式安装与选择。
+
+本轮已在 macOS 用官方 Go 包验证安装、版本解析、`go run`、`gofmt`、健康检查、卸载与离线重装。Windows/Linux 交叉编译通过，原生平台运行仍需对应环境验证。
 
 ## 配置与本机状态
 
@@ -122,7 +146,7 @@ SVM 不猜测项目入口，也不自动覆盖 VS Code 的 `launch.json`；需�
 
 ## 当前边界
 
-- 只完善 Node.js；其他 Provider 不在本轮范围。
+- 当前支持 Node.js 和 Go；其余 Provider 尚未迁移。
 - 默认测试使用伪源；本次已在 macOS 用官方 Node.js 包验证完整管理流程。
 - Windows/Linux 交叉编译通过；Windows 控制台、junction、PowerShell 钩子仍需对应平台原生验证。当前机器未安装 PowerShell。
 - Windows 的单进程 Interrupt 转发受 Go/控制台能力限制，Ctrl+C 依赖同一控制台的系统广播；Unix 代理支持 INT/TERM/HUP 转发。
@@ -140,6 +164,9 @@ go build -o build/svm ./cmd/svm
 python3 tests/integration/terminal_smoke.py
 python3 tests/integration/node_shell_smoke.py
 python3 tests/integration/default_shell_smoke.py
+python3 tests/integration/go_shell_smoke.py
+# 可选：下载真实官方 Go 包的完整测试
+SVM_TEST_GO_VERSION=1.27.3 python3 tests/integration/go_sdk_smoke.py
 ```
 
 CI 在 Windows、macOS、Linux 运行测试与构建。新增 Provider 前先完善当前闭环的失败恢复和平台测试，协作规则见 [AGENTS.md](AGENTS.md)。

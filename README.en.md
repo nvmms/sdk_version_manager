@@ -1,6 +1,6 @@
 # SDK Version Manager (SVM)
 
-The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. This first migration slice supports Node.js; other Providers from the Qt application have not been ported.
+The `go` branch migrates SVM to a standalone Go CLI without Qt or a GUI. The Go CLI supports Node.js and Go; other Providers have not been ported.
 
 Requires Go 1.23+. Terminal handling uses golang.org/x/term and golang.org/x/sys (BSD-3-Clause):
 
@@ -55,3 +55,23 @@ Use `--plain` for a printed table. Redirected output, nonterminal input, and TER
 Setting a default with `svm default node <version>` now automatically installs or updates integration for the detected shell, including the SVM binary directory, SDK activation and prompt hooks. New terminals work without a separate shell-install step. Existing terminals receive a profile-source command. `--shell zsh|bash|powershell` explicitly chooses integration, while `--no-shell` saves configuration without modifying shell profiles. Setup failures return nonzero and report the saved default as partial completion. Zsh respects ZDOTDIR. Repeat setup is idempotent and preserves profile contents and permissions.
 
 The fresh-home acceptance test `python3 tests/integration/default_shell_smoke.py` verifies default selection followed by a new shell, without manually installing hooks or evaluating environment scripts.
+
+## Go Provider
+
+```sh
+svm list go
+svm install go 1.27.3
+svm use go 1.27.3
+svm default go 1.27.3
+svm go version
+svm go env GOROOT
+svm go run main.go
+svm gofmt -w main.go
+svm uninstall go 1.27.3 --yes
+```
+
+Go uses the [official complete release index](https://go.dev/dl/?mode=json&include=all), stable platform archives and SHA-256 hashes. Versions omit the go prefix. There is no Go LTS filter. Download, extraction, locks, project/global selection, terminal picker and uninstall use the shared workflow. Cached indexes and verified archives allow offline reinstall.
+
+Node.js and Go can be bound together. Activation and proxies set GOROOT and pin GOTOOLCHAIN=local so Go cannot silently switch compilers. GOPATH is preserved. Shell deactivation restores previous GOROOT/GOTOOLCHAIN values. Official install, go run, gofmt, health, uninstall and offline reinstall were verified on macOS; other native platforms need their own runtime validation.
+
+Run `python3 tests/integration/go_shell_smoke.py` for offline multi-Provider activation checks. Opt into a real download with `SVM_TEST_GO_VERSION=1.27.3 python3 tests/integration/go_sdk_smoke.py`.

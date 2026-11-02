@@ -18,8 +18,8 @@ func (m *Manager) versionLock(provider, version string) string {
 	return filepath.Join(m.Root, "locks", provider+"-"+version+".lock")
 }
 func (m *Manager) SetDefault(provider, version string) error {
-	if provider != "node" || version != "" && !nodeVersion.MatchString(version) {
-		return errors.New("expected node and an exact version")
+	if !m.Supports(provider) || version != "" && !ValidVersion(provider, version) {
+		return errors.New("expected a supported Provider and an exact version")
 	}
 	lock, err := filelock.Acquire(filepath.Join(m.Root, "locks", "settings.lock"), false)
 	if err != nil {
@@ -49,7 +49,7 @@ func (m *Manager) SetDefault(provider, version string) error {
 // ownedDirectory refuses links and anything not marked by this implementation.
 // Read-only discovery still recognizes legacy installations without ownership marks.
 func (m *Manager) ownedDirectory(provider, version string) (string, error) {
-	if provider != "node" || !nodeVersion.MatchString(version) {
+	if !m.Supports(provider) || !ValidVersion(provider, version) {
 		return "", errors.New("invalid provider or version")
 	}
 	root, err := filepath.EvalSymlinks(m.Root)
@@ -114,8 +114,8 @@ func (m *Manager) ownedDirectory(provider, version string) (string, error) {
 
 // Uninstall removes only the owned SDK directory; downloads and project declarations remain.
 func (m *Manager) Uninstall(provider, version, dir string) (string, error) {
-	if provider != "node" || !nodeVersion.MatchString(version) {
-		return "", errors.New("usage: svm uninstall node <version> --yes")
+	if !m.Supports(provider) || !ValidVersion(provider, version) {
+		return "", errors.New("usage: svm uninstall <node|go> <version> --yes")
 	}
 	lock, err := filelock.Acquire(m.versionLock(provider, version), false)
 	if err != nil {
@@ -132,7 +132,7 @@ func (m *Manager) Uninstall(provider, version, dir string) (string, error) {
 		return "", err
 	}
 	if defaults[provider] == version {
-		return "", errors.New("version is the global default; run svm default node --clear or select another default first")
+		return "", fmt.Errorf("version is the global default; run svm default %s --clear or select another default first", provider)
 	}
 	path, err := config.Find(dir)
 	if err == nil {
@@ -175,6 +175,12 @@ func (m *Manager) Uninstall(provider, version, dir string) (string, error) {
 	return source, nil
 }
 func (m *Manager) Health(ctx context.Context, version string) error {
+	return m.HealthFor(ctx, "node", version)
+}
+func (m *Manager) HealthFor(ctx context.Context, provider, version string) error {
+	if provider == "go" {
+		return m.goHealth(ctx, version)
+	}
 	lock, err := filelock.Acquire(m.versionLock("node", version), true)
 	if err != nil {
 		return err
